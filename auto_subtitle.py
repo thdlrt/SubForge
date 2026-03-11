@@ -450,8 +450,8 @@ def step4_burn_subtitles(video_path, srt_path):
     return output_path
 
 
-def process_one(source):
-    """处理单个视频源（本地文件或 YouTube 链接）"""
+def process_one(source, burn_subtitle=True):
+    """处理单个视频源（本地文件或 YouTube 链接），返回输出文件路径字典"""
     is_local = os.path.isfile(source)
 
     if is_local:
@@ -506,7 +506,10 @@ def process_one(source):
 
     en_srt_path, subs = step2_transcribe(video_path)
     zh_srt_path, bi_srt_path = step3_translate(subs, video_path)
-    final_video = step4_burn_subtitles(video_path, bi_srt_path)
+
+    final_video = None
+    if burn_subtitle:
+        final_video = step4_burn_subtitles(video_path, bi_srt_path)
 
     print("\n" + "=" * 60)
     print("🎉 处理完成！")
@@ -515,7 +518,16 @@ def process_one(source):
     print(f"  英文字幕:   {en_srt_path}")
     print(f"  中文字幕:   {zh_srt_path}")
     print(f"  双语字幕:   {bi_srt_path}")
-    print(f"  最终视频:   {final_video}")
+    if final_video:
+        print(f"  最终视频:   {final_video}")
+
+    return {
+        "video": video_path,
+        "en_srt": en_srt_path,
+        "zh_srt": zh_srt_path,
+        "bi_srt": bi_srt_path,
+        "final_video": final_video,
+    }
 
 
 def main():
