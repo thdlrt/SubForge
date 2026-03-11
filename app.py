@@ -52,7 +52,7 @@ _processing_lock = threading.Lock()
 
 # ======================== 处理逻辑 ========================
 
-def _run_processing(sources, burn_subtitle, enable_dubbing):
+def _run_processing(sources, burn_subtitle, enable_dubbing, enable_enhance):
     """Generator: 在后台线程处理视频，实时流式输出日志"""
     log_q = queue.Queue()
     done = threading.Event()
@@ -71,7 +71,8 @@ def _run_processing(sources, burn_subtitle, enable_dubbing):
                     print("#" * 60)
                 try:
                     result = auto_subtitle.process_one(
-                        src, burn_subtitle=burn_subtitle, enable_dubbing=enable_dubbing
+                        src, burn_subtitle=burn_subtitle, enable_dubbing=enable_dubbing,
+                        enable_enhance=enable_enhance
                     )
                     if result:
                         for key in ("en_srt", "zh_srt", "bi_srt", "final_video", "dubbed_video"):
@@ -114,7 +115,7 @@ def _run_processing(sources, burn_subtitle, enable_dubbing):
         _processing_lock.release()
 
 
-def process_handler(urls_text, uploaded_files, burn_subtitle, enable_dubbing):
+def process_handler(urls_text, uploaded_files, burn_subtitle, enable_dubbing, enable_enhance):
     """Gradio 入口：解析输入，启动处理"""
     sources = []
 
@@ -135,7 +136,7 @@ def process_handler(urls_text, uploaded_files, burn_subtitle, enable_dubbing):
         yield "⚠ 请输入至少一个 YouTube 链接或上传本地视频文件。", []
         return
 
-    yield from _run_processing(sources, burn_subtitle, enable_dubbing)
+    yield from _run_processing(sources, burn_subtitle, enable_dubbing, enable_enhance)
 
 
 # ======================== 构建 UI ========================
@@ -177,6 +178,10 @@ def build_ui():
                         label="AI 中文配音（分离背景音 + edge-tts 语音合成）",
                         value=False,
                     )
+                    enhance_check = gr.Checkbox(
+                        label="AI 画质增强（Real-ESRGAN 超分辨率，耗时较长）",
+                        value=False,
+                    )
                     gr.Markdown(
                         f"**当前配置** *(来自 config.json)*\n\n"
                         f"- 语音模型: `{auto_subtitle.WHISPER_MODEL}` · "
@@ -207,7 +212,7 @@ def build_ui():
         # 绑定事件
         process_btn.click(
             fn=process_handler,
-            inputs=[urls_input, file_input, burn_sub, dub_check],
+            inputs=[urls_input, file_input, burn_sub, dub_check, enhance_check],
             outputs=[log_output, file_output],
         )
 

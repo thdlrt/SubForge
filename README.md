@@ -12,12 +12,13 @@ YouTube / 本地视频 → 语音识别 → AI 翻译 → 双语字幕压制 →
 - **双语字幕** — 自动生成 英文 / 中文 / 双语 三份 `.srt` 字幕文件
 - **硬字幕压制** — 通过 ffmpeg 将双语字幕烧录进视频，可直接上传 B 站
 - **AI 中文配音** — 使用 [demucs](https://github.com/facebookresearch/demucs) 分离背景音 + [edge-tts](https://github.com/rany2/edge-tts) 合成中文语音，自动混合为配音视频
+- **AI 画质增强** — 基于 [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) 超分辨率，将视频放大至最高 4K，GPU 加速，自动限制输出不超过 4K 分辨率
 - **Web UI** — 基于 Gradio 的可视化界面，拖拽上传 / 粘贴链接即可，实时查看处理日志
 
 ## 处理流程
 
 ```
-视频输入 → ① 下载/导入 → ② 语音识别(字幕) → ③ AI翻译(中文)
+视频输入 → ① 下载/导入 → ①.5 AI画质增强(可选) → ② 语音识别(字幕) → ③ AI翻译(中文)
          → ④ 硬字幕压制 → ⑤ 音频分离(demucs) → ⑥ TTS语音合成
          → ⑦ 混合音频 → 配音视频输出
 ```
@@ -38,7 +39,21 @@ pip install faster-whisper openai srt yt-dlp gradio
 
 # 配音功能依赖
 pip install demucs edge-tts pydub soundfile
+
+# 画质增强依赖
+pip install realesrgan basicsr opencv-python
 ```
+
+> **Windows CUDA 版 torch**：如果 `torch` 是 CPU 版（`torch.__version__` 末尾含 `+cpu`），画质增强只能用 CPU，速度极慢。RTX 显卡请重装 CUDA 版：
+> ```bash
+> pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124 --force-reinstall --no-deps
+> ```
+
+> **basicsr 兼容性修复**：`basicsr 1.4.2` 引用了 torchvision 旧 API，需手动 patch 一行（安装后执行一次）：
+> 找到 `site-packages/basicsr/data/degradations.py`，将
+> `from torchvision.transforms.functional_tensor import rgb_to_grayscale`
+> 改为
+> `from torchvision.transforms.functional import rgb_to_grayscale`
 
 > **关于 soundfile**：`torchaudio 2.10+` 默认使用 `torchcodec` 保存音频，但该库在 Windows 上存在 FFmpeg DLL 兼容问题。本项目通过 `_run_demucs.py` 包装脚本用 `soundfile` 替代 `torchcodec` 进行音频保存，因此 **必须安装 soundfile**（`pip install soundfile`），否则 demucs 音频分离步骤会失败。
 
@@ -91,7 +106,7 @@ python app.py
 启动后自动打开浏览器访问 `http://127.0.0.1:7860`，在界面中：
 
 1. 粘贴 YouTube 链接（每行一个）和/或上传本地视频文件
-2. 可选择是否压制硬字幕、是否启用 AI 中文配音
+2. 可选择是否压制硬字幕、是否启用 AI 中文配音、是否启用 AI 画质增强
 3. 点击「开始处理」，右侧实时显示处理日志
 4. 处理完成后直接下载输出文件
 
@@ -194,6 +209,15 @@ output/
 | `tts_bg_volume` | `0.5` | 0.0~1.0 | 背景音混合音量（0=静音，1=原音量） |
 | `tts_max_speed` | `1.5` | 1.0~2.0 | TTS 最大加速倍率。当合成语音比字幕时间长时会加速适配，此值限制最大加速，避免语速过快听不清。设为 `1.0` 则完全不加速 |
 
+### AI 画质增强
+
+| 参数 | 默认值 | 可选值 | 说明 |
+|------|--------|--------|------|
+| `enhance_model` | `"RealESRGAN_x4plus"` | `RealESRGAN_x4plus` / `RealESRGAN_x4plus_anime_6B` / `RealESRGAN_x2plus` | 超分模型。通用视频用 `x4plus`；动漫/二次元用 `x4plus_anime_6B`（更轻量）；只需 2x 放大用 `x2plus` |
+| `enhance_outscale` | `4` | `2` / `4` | 放大倍数。输出分辨率超过 4K（3840×2160）时会自动限制 |
+
+> 模型权重文件（约 64MB）在首次运行时自动从 GitHub Releases 下载，保存在 `realesrgan` 包目录的 `weights/` 下。
+
 ## 常见问题
 
 ### demucs 分离音频时报 torchcodec / torchaudio 错误
@@ -220,6 +244,20 @@ output/
 
 - 降低 `tts_max_speed`（如设为 `1.2` 甚至 `1.0`）
 - 调整 `tts_rate` 为负值（如 `"-10%"`）减慢 TTS 基础语速
+
+### 画质增强速度慢
+
+- 确认是否用上了 GPU：日志应显示 `设备: cuda`；若显示 `cpu` 请参考上方安装 CUDA 版 torch
+- 对于 1080p 视频，RTX 3090 约 **3~5 帧/秒**（≈ 视频时长的 6~10 倍处理时间），属正常范围
+- 如显存不足报 OOM，可在 `auto_subtitle.py` 中将 `tile_size = 1024` 改小（如 `512`）
+
+### 画质增强报 lzma DLL 错误（Windows）
+
+`basicsr` 依赖 `lzma`，conda 自建环境有时缺少 `liblzma.dll`：
+```powershell
+# 将 base 环境的 DLL 复制到当前环境
+Copy-Item "$env:CONDA_PREFIX\..\..\Library\bin\liblzma.dll" "$env:CONDA_PREFIX\Library\bin\"
+```
 
 ## 项目结构
 
