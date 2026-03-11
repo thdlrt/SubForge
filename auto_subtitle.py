@@ -579,24 +579,43 @@ def step6_tts_generate(zh_srt_path, video_path):
     tts_tmp_dir = base + "_tts_tmp"
     os.makedirs(tts_tmp_dir, exist_ok=True)
 
-    async def _generate_one(sub, idx):
-        """为单条字幕生成 TTS 音频"""
+    async def _generate_one(sub, idx, max_retries=3):
+        """为单条字幕生成 TTS 音频，失败自动重试"""
         text = sub.content.strip()
         if not text:
             return None
 
         out_file = os.path.join(tts_tmp_dir, f"{idx:04d}.mp3")
-        if os.path.exists(out_file):
-            return out_file
 
-        communicate = edge_tts.Communicate(
-            text=text,
-            voice=TTS_VOICE,
-            rate=TTS_RATE,
-            volume=TTS_VOLUME,
-        )
-        await communicate.save(out_file)
-        return out_file
+        # 已存在则校验有效性，损坏就删掉重新生成
+        if os.path.exists(out_file):
+            if os.path.getsize(out_file) >= 256:
+                return out_file
+            os.remove(out_file)
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                communicate = edge_tts.Communicate(
+                    text=text,
+                    voice=TTS_VOICE,
+                    rate=TTS_RATE,
+                    volume=TTS_VOLUME,
+                )
+                await communicate.save(out_file)
+                # 验证生成的文件
+                if os.path.exists(out_file) and os.path.getsize(out_file) >= 256:
+                    return out_file
+                # 文件太小视为损坏
+                if os.path.exists(out_file):
+                    os.remove(out_file)
+            except Exception as e:
+                if os.path.exists(out_file):
+                    os.remove(out_file)
+                if attempt < max_retries:
+                    await asyncio.sleep(0.5 * attempt)
+                else:
+                    print(f"  ⚠️  TTS 第 {idx} 条生成失败（已重试 {max_retries} 次）: {e}")
+        return None
 
     async def _generate_all():
         tasks = []
@@ -607,13 +626,33 @@ def step6_tts_generate(zh_srt_path, video_path):
     print(f"生成 {len(zh_subs)} 条 TTS 语音（voice={TTS_VOICE}）...")
     tts_files = asyncio.run(_generate_all())
 
+    async def _retry_one(sub, idx):
+        """拼接阶段发现损坏文件时的同步重试入口"""
+        return await _generate_one(sub, idx, max_retries=3)
+
     # 将每条 TTS 音频按字幕时间位置叠加到静音底板
     print("拼接 TTS 音频到时间轴...")
+    failed_count = 0
     for i, (sub, tts_file) in enumerate(zip(zh_subs, tts_files)):
         if tts_file is None or not os.path.exists(tts_file):
             continue
 
-        clip = AudioSegment.from_file(tts_file)
+        try:
+            clip = AudioSegment.from_file(tts_file)
+        except Exception:
+            # 解码失败：删除损坏文件，同步重试生成
+            print(f"  🔄 第 {i} 条 TTS 解码失败，重新生成...")
+            os.remove(tts_file)
+            retry_file = asyncio.run(_retry_one(zh_subs[i], i))
+            if retry_file is None:
+                failed_count += 1
+                continue
+            try:
+                clip = AudioSegment.from_file(retry_file)
+            except Exception:
+                failed_count += 1
+                print(f"  ⚠️  第 {i} 条重试后仍无法解码，跳过")
+                continue
         start_ms = int(sub.start.total_seconds() * 1000)
         end_ms = int(sub.end.total_seconds() * 1000)
         available_ms = end_ms - start_ms
@@ -637,6 +676,9 @@ def step6_tts_generate(zh_srt_path, video_path):
 
         if (i + 1) % 20 == 0:
             print(f"  已拼接 {i + 1}/{len(zh_subs)} 条...")
+
+    if failed_count > 0:
+        print(f"  ⚠️  共 {failed_count} 条 TTS 生成失败，对应位置将静音")
 
     # 导出最终 TTS 音轨
     silence.export(tts_output, format="wav")
@@ -737,7 +779,8 @@ def process_one(source, burn_subtitle=True, enable_dubbing=False):
         print("🚀 开始处理（YouTube 下载模式）...")
         print(f"   视频链接: {url}")
 
-        # 提前获取标题，判断是否已下载过
+        # 提前获取标题，判断是否已下载过（仅捕获标题获取失败，不吞处理异常）
+        pre_file = None
         try:
             title_result = subprocess.run(
                 ["yt-dlp", "--print", "title", "--no-playlist", url],
@@ -747,68 +790,34 @@ def process_one(source, burn_subtitle=True, enable_dubbing=False):
             pre_name = _sanitize_name(raw_title)
             pre_dir  = os.path.join("./output", pre_name)
             pre_file = os.path.join(pre_dir, pre_name + ".mp4")
-            if os.path.exists(pre_file):
-                print(f"⏭️  视频已存在，跳过下载: {pre_file}")
-                video_path = pre_file
-                output_dir = pre_dir
-                # 跳过下载后，直接执行后续步骤
-                print(f"   工作目录: {os.path.abspath(output_dir)}")
-                print(f"   语音识别: faster-whisper [{WHISPER_MODEL}] ← 本地 GPU")
-                print(f"   翻译引擎: Qwen3.5 API [{QWEN_MODEL}] ← 云端大模型")
-                en_srt_path, subs = step2_transcribe(video_path)
-                zh_srt_path, bi_srt_path = step3_translate(subs, video_path)
-
-                final_video = None
-                if burn_subtitle:
-                    final_video = step4_burn_subtitles(video_path, bi_srt_path)
-
-                dubbed_video = None
-                if enable_dubbing:
-                    bg_path = step5_separate_audio(video_path)
-                    tts_path = step6_tts_generate(zh_srt_path, video_path)
-                    # burn_subtitle 已勾选则用字幕视频，否则用原始视频
-                    dub_base = final_video if final_video and os.path.exists(final_video) else video_path
-                    dubbed_video = step7_merge_audio(dub_base, bg_path, tts_path)
-
-                print("\n" + "=" * 60)
-                print("🎉 处理完成！")
-                print("=" * 60)
-                print(f"  原始视频:   {video_path}")
-                print(f"  英文字幕:   {en_srt_path}")
-                print(f"  中文字幕:   {zh_srt_path}")
-                print(f"  双语字幕:   {bi_srt_path}")
-                if final_video:
-                    print(f"  最终视频:   {final_video}")
-                if dubbed_video:
-                    print(f"  配音视频:   {dubbed_video}")
-                return {
-                    "video": video_path, "en_srt": en_srt_path,
-                    "zh_srt": zh_srt_path, "bi_srt": bi_srt_path,
-                    "final_video": final_video, "dubbed_video": dubbed_video,
-                }
         except Exception:
             pass  # 获取标题失败则继续正常下载
 
-        video_path = step1_download_video(url, temp_dir)
+        if pre_file and os.path.exists(pre_file):
+            print(f"⏭️  视频已存在，跳过下载: {pre_file}")
+            video_path = pre_file
+            output_dir = pre_dir
+        else:
+            video_path = step1_download_video(url, temp_dir)
 
-        # 用净化后的视频名创建专属工作目录，同时重命名文件
-        video_name = _sanitize_name(Path(video_path).stem)
-        output_dir = os.path.join("./output", video_name)
-        os.makedirs(output_dir, exist_ok=True)
+            # 用净化后的视频名创建专属工作目录，同时重命名文件
+            video_name = _sanitize_name(Path(video_path).stem)
+            output_dir = os.path.join("./output", video_name)
+            os.makedirs(output_dir, exist_ok=True)
 
-        # 移动并重命名视频到工作目录
-        safe_filename = video_name + Path(video_path).suffix
-        target_path = os.path.join(output_dir, safe_filename)
-        if os.path.abspath(video_path) != os.path.abspath(target_path):
-            import shutil
-            shutil.move(video_path, target_path)
-            video_path = target_path
+            # 移动并重命名视频到工作目录
+            safe_filename = video_name + Path(video_path).suffix
+            target_path = os.path.join(output_dir, safe_filename)
+            if os.path.abspath(video_path) != os.path.abspath(target_path):
+                import shutil
+                shutil.move(video_path, target_path)
+                video_path = target_path
 
-        # 清理临时目录（如果空了）
-        try:
-            os.rmdir(temp_dir)
-        except OSError:
-            pass
+            # 清理临时目录（如果空了）
+            try:
+                os.rmdir(temp_dir)
+            except OSError:
+                pass
 
     print(f"   工作目录: {os.path.abspath(output_dir)}")
     print(f"   语音识别: faster-whisper [{WHISPER_MODEL}] ← 本地 GPU")
