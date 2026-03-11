@@ -1,0 +1,561 @@
+"""
+YouTube 视频下载 + AI字幕生成 + Qwen3.5 API翻译 + 字幕压制 一键脚本
+使用方法: python auto_subtitle.py "https://www.youtube.com/watch?v=XXXXX"
+"""
+
+import subprocess
+import sys
+import os
+import time
+import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# 强制 stdout/stderr 使用 UTF-8，避免 Windows GBK 终端无法输出 Emoji
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+import srt
+from datetime import timedelta
+from pathlib import Path
+
+
+# ======================== 加载配置 ========================
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+
+def _load_config():
+    """从 config.json 加载配置，缺失字段使用默认值"""
+    defaults = {
+        "whisper_model": "medium",
+        "device": "auto",
+        "compute_type": "auto",
+        "video_language": "en",
+        "max_video_height": 1080,
+        "subtitle_max_gap_ms": 1500,
+        "qwen_api_key": "",
+        "qwen_base_url": "",
+        "qwen_model": "qwen3.5-plus",
+        "translate_batch_size": 50,
+        "translate_concurrency": 10,
+        "api_retry": 3,
+        "api_sleep": 0.5,
+        "font_size": 20,
+        "subtitle_font": "Microsoft YaHei",
+        "subtitle_primary_color": "&H00FFFFFF",
+        "subtitle_outline_color": "&H00000000",
+        "subtitle_outline": 1,
+        "subtitle_shadow": 0,
+        "subtitle_margin_v": 30,
+    }
+    if os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            user_cfg = json.load(f)
+        # 只取非注释字段（跳过 _ 开头的键）
+        for k, v in user_cfg.items():
+            if not k.startswith("_") and k in defaults:
+                defaults[k] = v
+    else:
+        print(f"⚠ 未找到配置文件 {CONFIG_PATH}，使用默认配置")
+    return defaults
+
+_cfg = _load_config()
+
+WHISPER_MODEL          = _cfg["whisper_model"]
+DEVICE                 = _cfg["device"]
+COMPUTE_TYPE           = _cfg["compute_type"]
+VIDEO_LANGUAGE         = _cfg["video_language"]
+MAX_VIDEO_HEIGHT       = _cfg["max_video_height"]
+SUBTITLE_MAX_GAP_MS    = _cfg["subtitle_max_gap_ms"]
+QWEN_API_KEY           = _cfg["qwen_api_key"]
+QWEN_BASE_URL          = _cfg["qwen_base_url"]
+QWEN_MODEL             = _cfg["qwen_model"]
+TRANSLATE_BATCH_SIZE   = _cfg["translate_batch_size"]
+TRANSLATE_CONCURRENCY  = _cfg["translate_concurrency"]
+API_RETRY              = _cfg["api_retry"]
+API_SLEEP              = _cfg["api_sleep"]
+FONT_SIZE              = _cfg["font_size"]
+SUBTITLE_FONT          = _cfg["subtitle_font"]
+SUBTITLE_PRIMARY_COLOR = _cfg["subtitle_primary_color"]
+SUBTITLE_OUTLINE_COLOR = _cfg["subtitle_outline_color"]
+SUBTITLE_OUTLINE       = _cfg["subtitle_outline"]
+SUBTITLE_SHADOW        = _cfg["subtitle_shadow"]
+SUBTITLE_MARGIN_V      = _cfg["subtitle_margin_v"]
+# ========================================================
+
+
+SYSTEM_PROMPT = """You are a professional English-to-Chinese translator specializing in game development, computer graphics, and software engineering.
+
+Rules:
+1. Translate the given English subtitle lines into fluent, natural Simplified Chinese.
+2. Keep technical terms accurate. Examples:
+   - "shader" → "着色器", "rendering pipeline" → "渲染管线", "mesh" → "网格"
+   - "frame rate" → "帧率", "occlusion culling" → "遮挡剔除"
+3. Terms commonly kept in English in the Chinese game dev community should stay in English: Unity, Unreal, GPU, CPU, API, GDC, LOD, PBR, HLSL, etc.
+4. Each line in the input is a separate subtitle. Translate each line independently.
+5. Output ONLY the translations, one per line, in the same order. No numbering, no explanations, no extra text.
+6. The number of output lines MUST exactly match the number of input lines."""
+
+
+def step1_download_video(url, output_dir):
+    """第一步：下载 YouTube 视频"""
+    print("\n" + "=" * 60)
+    print("📥 第一步：下载视频...")
+    print("=" * 60)
+
+    output_template = os.path.join(output_dir, "%(title)s.%(ext)s")
+
+    cmd = [
+        "yt-dlp",
+        "-f", f"bestvideo[height<={MAX_VIDEO_HEIGHT}]+bestaudio/best[height<={MAX_VIDEO_HEIGHT}]",
+        "--merge-output-format", "mp4",
+        "-o", output_template,
+        "--no-playlist",
+        url
+    ]
+
+    subprocess.run(cmd, check=True)
+
+    mp4_files = list(Path(output_dir).glob("*.mp4"))
+    if not mp4_files:
+        raise FileNotFoundError("未找到下载的视频文件！")
+
+    video_path = max(mp4_files, key=os.path.getmtime)
+    print(f"✅ 视频已下载: {video_path}")
+
+    # 用 ffprobe 读取并打印视频规格
+    try:
+        probe_cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height,r_frame_rate,codec_name,bit_rate",
+            "-show_entries", "format=duration,size,bit_rate",
+            "-of", "default=noprint_wrappers=1",
+            str(video_path)
+        ]
+        probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
+        info_lines = {}
+        for line in probe_result.stdout.splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                info_lines[k.strip()] = v.strip()
+
+        width     = info_lines.get("width", "?")
+        height    = info_lines.get("height", "?")
+        codec     = info_lines.get("codec_name", "?")
+        fps_raw   = info_lines.get("r_frame_rate", "?")
+        duration  = float(info_lines.get("duration", 0))
+        filesize  = int(info_lines.get("size", 0))
+        vbitrate  = info_lines.get("bit_rate", "?")
+
+        # 计算帧率（分数形式如 24000/1001）
+        if "/" in fps_raw:
+            num, den = fps_raw.split("/")
+            fps_val = f"{int(num)/int(den):.2f}"
+        else:
+            fps_val = fps_raw
+
+        h = int(duration) // 3600
+        m = (int(duration) % 3600) // 60
+        s = int(duration) % 60
+        dur_str = f"{h:02d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+        size_mb = filesize / 1024 / 1024
+
+        vbr_str = f"{int(vbitrate)//1000} kbps" if vbitrate.isdigit() else vbitrate
+
+        print(f"   📐 分辨率:  {width}x{height}")
+        print(f"   🎞️  编码:    {codec}")
+        print(f"   ⏱️  帧率:    {fps_val} fps")
+        print(f"   ⏳ 时长:    {dur_str}")
+        print(f"   💾 文件大小: {size_mb:.1f} MB")
+        print(f"   📶 视频码率: {vbr_str}")
+    except Exception as e:
+        print(f"  ⚠ 无法读取视频规格: {e}")
+
+    return str(video_path)
+
+
+def step2_transcribe(video_path):
+    """第二步：用 Whisper 识别语音，生成英文字幕"""
+    print("\n" + "=" * 60)
+    print("🎤 第二步：语音识别生成英文字幕（本地 GPU）...")
+    print("=" * 60)
+
+    en_srt_path = video_path.rsplit(".", 1)[0] + "_en.srt"
+    if os.path.exists(en_srt_path):
+        print(f"⏭️  英文字幕已存在，跳过转录: {en_srt_path}")
+        with open(en_srt_path, encoding="utf-8") as f:
+            subs = list(srt.parse(f.read()))
+        print(f"   ↳ 共读取 {len(subs)} 条字幕")
+        return en_srt_path, subs
+
+    from faster_whisper import WhisperModel
+
+    print(f"加载模型 '{WHISPER_MODEL}'（首次运行会自动下载，请耐心等待）...")
+    model = WhisperModel(WHISPER_MODEL, device=DEVICE, compute_type=COMPUTE_TYPE)
+
+    print("开始转录...")
+    segments, info = model.transcribe(
+        video_path,
+        language=VIDEO_LANGUAGE,
+        vad_filter=True,
+        vad_parameters=dict(min_silence_duration_ms=500),
+        word_timestamps=True,
+    )
+
+    print(f"检测到语言: {info.language}, 置信度: {info.language_probability:.2f}")
+
+    gap_threshold = SUBTITLE_MAX_GAP_MS / 1000.0  # 转为秒
+    raw_segs = list(segments)
+    subs = []
+    idx = 0
+    for seg in raw_segs:
+        words = seg.words if seg.words else []
+        if not words:
+            # 无词级时间戳时直接使用段级信息
+            idx += 1
+            subs.append(srt.Subtitle(
+                index=idx,
+                start=timedelta(seconds=seg.start),
+                end=timedelta(seconds=seg.end),
+                content=seg.text.strip()
+            ))
+        else:
+            # 按词间间隙分割字幕
+            chunk_words = [words[0]]
+            for w_prev, w_curr in zip(words[:-1], words[1:]):
+                if w_curr.start - w_prev.end > gap_threshold:
+                    # 间隙过大，当前 chunk 生成一条字幕
+                    idx += 1
+                    subs.append(srt.Subtitle(
+                        index=idx,
+                        start=timedelta(seconds=chunk_words[0].start),
+                        end=timedelta(seconds=chunk_words[-1].end),
+                        content="".join(w.word for w in chunk_words).strip()
+                    ))
+                    chunk_words = []
+                chunk_words.append(w_curr)
+            # 最后一个 chunk
+            if chunk_words:
+                idx += 1
+                subs.append(srt.Subtitle(
+                    index=idx,
+                    start=timedelta(seconds=chunk_words[0].start),
+                    end=timedelta(seconds=chunk_words[-1].end),
+                    content="".join(w.word for w in chunk_words).strip()
+                ))
+        if idx % 20 == 0 and idx > 0:
+            print(f"  已处理 {idx} 条字幕...")
+
+    with open(en_srt_path, "w", encoding="utf-8") as f:
+        f.write(srt.compose(subs))
+
+    print(f"✅ 英文字幕已生成: {en_srt_path} (共 {len(subs)} 条)")
+    return en_srt_path, subs
+
+
+def translate_batch_qwen(texts):
+    """用 Qwen3.5 API 批量翻译"""
+    from openai import OpenAI
+
+    client = OpenAI(api_key=QWEN_API_KEY, base_url=QWEN_BASE_URL)
+
+    # 每行一条字幕，要求模型按行对应输出
+    user_content = "\n".join(texts)
+
+    for attempt in range(API_RETRY):
+        try:
+            response = client.chat.completions.create(
+                model=QWEN_MODEL,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content}
+                ],
+                temperature=0.3,
+                max_tokens=4096,
+            )
+
+            result = response.choices[0].message.content.strip()
+
+            # 按换行拆分
+            translated_lines = [line.strip() for line in result.split("\n") if line.strip()]
+
+            # 检查行数是否匹配
+            if len(translated_lines) == len(texts):
+                return translated_lines
+
+            # 行数不匹配，如果差距不大，尝试补齐或截断
+            if len(translated_lines) > len(texts):
+                return translated_lines[:len(texts)]
+
+            # 行数太少，回退逐条翻译
+            print(f"    ⚠ 行数不匹配 ({len(translated_lines)} vs {len(texts)})，第 {attempt+1} 次重试...")
+            continue
+
+        except Exception as e:
+            print(f"    ⚠ API 调用出错: {e}，第 {attempt+1} 次重试...")
+            time.sleep(2)
+
+    # 全部重试失败，逐条翻译
+    print("    ⚠ 批量翻译失败，回退逐条翻译...")
+    return translate_one_by_one(texts)
+
+
+def translate_one_by_one(texts):
+    """逐条翻译（兜底方案）"""
+    from openai import OpenAI
+
+    client = OpenAI(api_key=QWEN_API_KEY, base_url=QWEN_BASE_URL)
+    results = []
+
+    for text in texts:
+        try:
+            response = client.chat.completions.create(
+                model=QWEN_MODEL,
+                messages=[
+                    {"role": "system", "content": "将以下英文翻译成简体中文，只输出翻译结果："},
+                    {"role": "user", "content": text}
+                ],
+                temperature=0.3,
+                max_tokens=512,
+            )
+            translated = response.choices[0].message.content.strip()
+            results.append(translated if translated else text)
+        except Exception:
+            results.append(text)
+        time.sleep(0.5)  # 逐条翻译时加点间隔
+
+    return results
+
+
+def step3_translate(subs, video_path):
+    """第三步：用 Qwen3.5 API 并发翻译字幕"""
+    print("\n" + "=" * 60)
+    print(f"🌐 第三步：使用 Qwen3.5 API 翻译字幕（并发 {TRANSLATE_CONCURRENCY} 批）...")
+    print("=" * 60)
+
+    zh_srt_path  = video_path.rsplit(".", 1)[0] + "_zh.srt"
+    bi_srt_path  = video_path.rsplit(".", 1)[0] + "_bilingual.srt"
+    if os.path.exists(zh_srt_path) and os.path.exists(bi_srt_path):
+        print(f"⏭️  中文/双语字幕已存在，跳过翻译:")
+        print(f"   ↳ {zh_srt_path}")
+        print(f"   ↳ {bi_srt_path}")
+        return zh_srt_path, bi_srt_path
+
+    total = len(subs)
+    # 将字幕切成若干批，记录每批的起始索引
+    batches = [
+        (batch_start, subs[batch_start: batch_start + TRANSLATE_BATCH_SIZE])
+        for batch_start in range(0, total, TRANSLATE_BATCH_SIZE)
+    ]
+    batch_count = len(batches)
+    print(f"共 {total} 条字幕，分 {batch_count} 批，每批 {TRANSLATE_BATCH_SIZE} 条，并发 {TRANSLATE_CONCURRENCY} 批")
+
+    # results[batch_start] = [translated_text, ...]
+    results = {}
+    completed = 0
+
+    def _translate_batch(batch_start, batch):
+        # 轻微随机抖动，避免并发请求完全同时到达
+        time.sleep(batch_start % TRANSLATE_CONCURRENCY * API_SLEEP / TRANSLATE_CONCURRENCY)
+        texts = [sub.content for sub in batch]
+        return batch_start, translate_batch_qwen(texts)
+
+    with ThreadPoolExecutor(max_workers=TRANSLATE_CONCURRENCY) as executor:
+        futures = {
+            executor.submit(_translate_batch, bs, batch): bs
+            for bs, batch in batches
+        }
+        for future in as_completed(futures):
+            batch_start, translated_texts = future.result()
+            results[batch_start] = translated_texts
+            completed += 1
+            done_subs = min(batch_start + TRANSLATE_BATCH_SIZE, total)
+            print(f"  ✅ 批次 {batch_start // TRANSLATE_BATCH_SIZE + 1}/{batch_count} 完成 "
+                  f"(字幕 {batch_start + 1}–{done_subs})  [{completed}/{batch_count} 批已完成]")
+
+    # 按原始顺序拼装翻译结果
+    translated_subs = []
+    for batch_start, batch in batches:
+        translated_texts = results[batch_start]
+        for j, sub in enumerate(batch):
+            translated_subs.append(srt.Subtitle(
+                index=sub.index,
+                start=sub.start,
+                end=sub.end,
+                content=translated_texts[j]
+            ))
+
+    # 保存中文 SRT
+    zh_srt_path = video_path.rsplit(".", 1)[0] + "_zh.srt"
+    with open(zh_srt_path, "w", encoding="utf-8") as f:
+        f.write(srt.compose(translated_subs))
+
+    # 生成双语字幕
+    bilingual_subs = []
+    for orig, trans in zip(subs, translated_subs):
+        bilingual_sub = srt.Subtitle(
+            index=orig.index,
+            start=orig.start,
+            end=orig.end,
+            content=f"{trans.content}\n{orig.content}"
+        )
+        bilingual_subs.append(bilingual_sub)
+
+    bi_srt_path = video_path.rsplit(".", 1)[0] + "_bilingual.srt"
+    with open(bi_srt_path, "w", encoding="utf-8") as f:
+        f.write(srt.compose(bilingual_subs))
+
+    print(f"✅ 中文字幕已生成: {zh_srt_path}")
+    print(f"✅ 双语字幕已生成: {bi_srt_path}")
+    return zh_srt_path, bi_srt_path
+
+
+def step4_burn_subtitles(video_path, srt_path):
+    """第四步：将字幕烧录进视频"""
+    print("\n" + "=" * 60)
+    print("🔥 第四步：压制硬字幕到视频...")
+    print("=" * 60)
+
+    output_path = video_path.rsplit(".", 1)[0] + "_硬字幕.mp4"
+    srt_escaped = srt_path.replace("\\", "/").replace(":", "\\:")
+
+    style = (
+        f"FontSize={FONT_SIZE}"
+        f",FontName={SUBTITLE_FONT}"
+        f",PrimaryColour={SUBTITLE_PRIMARY_COLOR}"
+        f",OutlineColour={SUBTITLE_OUTLINE_COLOR}"
+        f",Outline={SUBTITLE_OUTLINE}"
+        f",Shadow={SUBTITLE_SHADOW}"
+        f",MarginV={SUBTITLE_MARGIN_V}"
+        f",Bold=1"
+    )
+    subtitle_filter = f"subtitles='{srt_escaped}':force_style='{style}'"
+
+    cmd = [
+        "ffmpeg",
+        "-i", video_path,
+        "-vf", subtitle_filter,
+        "-c:v", "libx264",
+        "-crf", "18",
+        "-preset", "medium",
+        "-c:a", "copy",
+        "-y",
+        output_path
+    ]
+
+    print(f"执行命令: {' '.join(cmd)}")
+    subprocess.run(cmd, check=True)
+
+    print(f"✅ 最终视频已生成: {output_path}")
+    return output_path
+
+
+def process_one(source):
+    """处理单个视频源（本地文件或 YouTube 链接）"""
+    is_local = os.path.isfile(source)
+
+    if is_local:
+        # 本地文件模式：直接使用，跳过下载
+        video_path = os.path.abspath(source)
+        video_name = Path(video_path).stem
+        output_dir = os.path.join("./output", video_name)
+        os.makedirs(output_dir, exist_ok=True)
+
+        # 如果视频不在工作目录里，复制一份过去（保持所有产物集中）
+        target_path = os.path.join(output_dir, Path(video_path).name)
+        if os.path.abspath(video_path) != os.path.abspath(target_path):
+            import shutil
+            if not os.path.exists(target_path):
+                shutil.copy2(video_path, target_path)
+            video_path = target_path
+
+        print("🚀 开始处理（本地文件模式）...")
+        print(f"   视频文件: {video_path}")
+    else:
+        # YouTube 下载模式：先下载到临时目录，再用视频名创建子目录
+        url = source
+        temp_dir = "./output/_temp_download"
+        os.makedirs(temp_dir, exist_ok=True)
+
+        print("🚀 开始处理（YouTube 下载模式）...")
+        print(f"   视频链接: {url}")
+
+        video_path = step1_download_video(url, temp_dir)
+
+        # 用视频文件名创建专属工作目录
+        video_name = Path(video_path).stem
+        output_dir = os.path.join("./output", video_name)
+        os.makedirs(output_dir, exist_ok=True)
+
+        # 移动视频到工作目录
+        target_path = os.path.join(output_dir, Path(video_path).name)
+        if os.path.abspath(video_path) != os.path.abspath(target_path):
+            import shutil
+            shutil.move(video_path, target_path)
+            video_path = target_path
+
+        # 清理临时目录（如果空了）
+        try:
+            os.rmdir(temp_dir)
+        except OSError:
+            pass
+
+    print(f"   工作目录: {os.path.abspath(output_dir)}")
+    print(f"   语音识别: faster-whisper [{WHISPER_MODEL}] ← 本地 GPU")
+    print(f"   翻译引擎: Qwen3.5 API [{QWEN_MODEL}] ← 云端大模型")
+
+    en_srt_path, subs = step2_transcribe(video_path)
+    zh_srt_path, bi_srt_path = step3_translate(subs, video_path)
+    final_video = step4_burn_subtitles(video_path, bi_srt_path)
+
+    print("\n" + "=" * 60)
+    print("🎉 处理完成！")
+    print("=" * 60)
+    print(f"  原始视频:   {video_path}")
+    print(f"  英文字幕:   {en_srt_path}")
+    print(f"  中文字幕:   {zh_srt_path}")
+    print(f"  双语字幕:   {bi_srt_path}")
+    print(f"  最终视频:   {final_video}")
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("用法:")
+        print('  python auto_subtitle.py <源1> [源2] [源3] ...')
+        print()
+        print('每个"源"可以是 YouTube 链接或本地视频路径，多个源按顺序依次处理。')
+        print()
+        print("示例:")
+        print('  # 单个 YouTube 视频')
+        print('  python auto_subtitle.py "https://www.youtube.com/watch?v=XXXXX"')
+        print()
+        print('  # 单个本地文件')
+        print('  python auto_subtitle.py ./input/my_video.mp4')
+        print()
+        print('  # 批量混合（YouTube + 本地文件）')
+        print('  python auto_subtitle.py "https://youtu.be/AAA" ./input/a.mp4 "https://youtu.be/BBB"')
+        sys.exit(1)
+
+    sources = sys.argv[1:]
+    total = len(sources)
+
+    if total == 1:
+        process_one(sources[0])
+    else:
+        print(f"📋 批量模式：共 {total} 个任务")
+        for i, src in enumerate(sources, 1):
+            print("\n" + "#" * 60)
+            print(f"## 任务 [{i}/{total}]: {src}")
+            print("#" * 60)
+            try:
+                process_one(src)
+            except Exception as e:
+                print(f"\n❌ 任务 [{i}/{total}] 处理失败: {e}")
+                print("跳过此任务，继续处理下一个...")
+        print("\n" + "=" * 60)
+        print(f"📋 批量处理全部结束（共 {total} 个任务）")
+        print("=" * 60)
+
+
+if __name__ == "__main__":
+    main()

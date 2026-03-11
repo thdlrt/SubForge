@@ -1,0 +1,22 @@
+{
+    "whisper_model": "medium",
+    "device": "auto",
+    "compute_type": "auto",
+    "video_language": "en",
+    "max_video_height": 1080,
+    "subtitle_max_gap_ms": 1500,
+    "qwen_api_key": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
+    "qwen_base_url": "https://your-api-endpoint/v1",
+    "qwen_model": "qwen3.5-plus",
+    "translate_batch_size": 50,
+    "translate_concurrency": 10,
+    "api_retry": 3,
+    "api_sleep": 0.5,
+    "font_size": 16,
+    "subtitle_font": "Microsoft YaHei",
+    "subtitle_primary_color": "&H00FFFFFF",
+    "subtitle_outline_color": "&H00000000",
+    "subtitle_outline": 1,
+    "subtitle_shadow": 0,
+    "subtitle_margin_v": 30
+}
