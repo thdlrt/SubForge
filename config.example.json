@@ -18,5 +18,10 @@
     "subtitle_outline_color": "&H00000000",
     "subtitle_outline": 1,
     "subtitle_shadow": 0,
-    "subtitle_margin_v": 30
+    "subtitle_margin_v": 30,
+    "tts_voice": "zh-CN-YunjianNeural",
+    "tts_rate": "+0%",
+    "tts_volume": "+0%",
+    "tts_bg_volume": 0.15,
+    "tts_max_speed": 1.5
 }

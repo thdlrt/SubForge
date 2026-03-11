@@ -52,7 +52,7 @@ _processing_lock = threading.Lock()
 
 # ======================== 处理逻辑 ========================
 
-def _run_processing(sources, burn_subtitle):
+def _run_processing(sources, burn_subtitle, enable_dubbing):
     """Generator: 在后台线程处理视频，实时流式输出日志"""
     log_q = queue.Queue()
     done = threading.Event()
@@ -70,9 +70,11 @@ def _run_processing(sources, burn_subtitle):
                     print(f"## 任务 [{i + 1}/{total}]: {src}")
                     print("#" * 60)
                 try:
-                    result = auto_subtitle.process_one(src, burn_subtitle=burn_subtitle)
+                    result = auto_subtitle.process_one(
+                        src, burn_subtitle=burn_subtitle, enable_dubbing=enable_dubbing
+                    )
                     if result:
-                        for key in ("en_srt", "zh_srt", "bi_srt", "final_video"):
+                        for key in ("en_srt", "zh_srt", "bi_srt", "final_video", "dubbed_video"):
                             path = result.get(key)
                             if path and os.path.exists(path):
                                 result_files.append(path)
@@ -112,7 +114,7 @@ def _run_processing(sources, burn_subtitle):
         _processing_lock.release()
 
 
-def process_handler(urls_text, uploaded_files, burn_subtitle):
+def process_handler(urls_text, uploaded_files, burn_subtitle, enable_dubbing):
     """Gradio 入口：解析输入，启动处理"""
     sources = []
 
@@ -133,7 +135,7 @@ def process_handler(urls_text, uploaded_files, burn_subtitle):
         yield "⚠ 请输入至少一个 YouTube 链接或上传本地视频文件。", []
         return
 
-    yield from _run_processing(sources, burn_subtitle)
+    yield from _run_processing(sources, burn_subtitle, enable_dubbing)
 
 
 # ======================== 构建 UI ========================
@@ -170,7 +172,11 @@ def build_ui():
                 )
 
                 with gr.Accordion("⚙️ 处理选项", open=False):
-                    burn_sub = gr.Checkbox(label="压制硬字幕到视频（较耗时）", value=True)
+                    burn_sub = gr.Checkbox(label="压制硬字幕到视频", value=True)
+                    dub_check = gr.Checkbox(
+                        label="AI 中文配音（分离背景音 + edge-tts 语音合成）",
+                        value=False,
+                    )
                     gr.Markdown(
                         f"**当前配置** *(来自 config.json)*\n\n"
                         f"- 语音模型: `{auto_subtitle.WHISPER_MODEL}` · "
@@ -201,7 +207,7 @@ def build_ui():
         # 绑定事件
         process_btn.click(
             fn=process_handler,
-            inputs=[urls_input, file_input, burn_sub],
+            inputs=[urls_input, file_input, burn_sub, dub_check],
             outputs=[log_output, file_output],
         )
 

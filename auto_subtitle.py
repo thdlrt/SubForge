@@ -56,6 +56,11 @@ def _load_config():
         "subtitle_outline": 1,
         "subtitle_shadow": 0,
         "subtitle_margin_v": 30,
+        "tts_voice": "zh-CN-YunjianNeural",
+        "tts_rate": "+0%",
+        "tts_volume": "+0%",
+        "tts_bg_volume": 0.5,
+        "tts_max_speed": 1.5,
     }
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -90,6 +95,11 @@ SUBTITLE_OUTLINE_COLOR = _cfg["subtitle_outline_color"]
 SUBTITLE_OUTLINE       = _cfg["subtitle_outline"]
 SUBTITLE_SHADOW        = _cfg["subtitle_shadow"]
 SUBTITLE_MARGIN_V      = _cfg["subtitle_margin_v"]
+TTS_VOICE              = _cfg["tts_voice"]
+TTS_RATE               = _cfg["tts_rate"]
+TTS_VOLUME             = _cfg["tts_volume"]
+TTS_BG_VOLUME          = _cfg["tts_bg_volume"]
+TTS_MAX_SPEED          = _cfg["tts_max_speed"]
 # ========================================================
 
 
@@ -114,9 +124,15 @@ def step1_download_video(url, output_dir):
 
     output_template = os.path.join(output_dir, "%(title)s.%(ext)s")
 
+    fmt = (
+        f"bestvideo[height<={MAX_VIDEO_HEIGHT}]+bestaudio"
+        f"/best[height<={MAX_VIDEO_HEIGHT}]"
+        f"/bestvideo+bestaudio"
+        f"/best"
+    )
     cmd = [
         "yt-dlp",
-        "-f", f"bestvideo[height<={MAX_VIDEO_HEIGHT}]+bestaudio/best[height<={MAX_VIDEO_HEIGHT}]",
+        "-f", fmt,
         "--merge-output-format", "mp4",
         "-o", output_template,
         "--no-playlist",
@@ -281,7 +297,8 @@ def translate_batch_qwen(texts):
                     {"role": "user", "content": user_content}
                 ],
                 temperature=0.3,
-                max_tokens=4096,
+                max_tokens=2048,
+                extra_body={"enable_thinking": False},
             )
 
             result = response.choices[0].message.content.strip()
@@ -326,7 +343,8 @@ def translate_one_by_one(texts):
                     {"role": "user", "content": text}
                 ],
                 temperature=0.3,
-                max_tokens=512,
+                max_tokens=256,
+                extra_body={"enable_thinking": False},
             )
             translated = response.choices[0].message.content.strip()
             results.append(translated if translated else text)
@@ -427,6 +445,9 @@ def step4_burn_subtitles(video_path, srt_path):
     print("=" * 60)
 
     output_path = video_path.rsplit(".", 1)[0] + "_硬字幕.mp4"
+    if os.path.exists(output_path):
+        print(f"⏭️  硬字幕视频已存在，跳过压制: {output_path}")
+        return output_path
     # ffmpeg subtitle filter 路径规则：反斜杠→斜杠，冒号需转义，单引号需转义
     srt_escaped = srt_path.replace("\\", "/").replace("'", "\\'").replace(":", "\\:")
 
@@ -461,7 +482,231 @@ def step4_burn_subtitles(video_path, srt_path):
     return output_path
 
 
-def process_one(source, burn_subtitle=True):
+# ======================== AI 配音步骤 ========================
+
+def step5_separate_audio(video_path):
+    """第五步：用 demucs 将音频分离为人声 + 背景音"""
+    print("\n" + "=" * 60)
+    print("🎵 第五步：分离音频（人声 / 背景音）...")
+    print("=" * 60)
+
+    base = video_path.rsplit(".", 1)[0]
+    bg_path = base + "_background.wav"
+    if os.path.exists(bg_path):
+        print(f"⏭️  背景音已存在，跳过分离: {bg_path}")
+        return bg_path
+
+    output_dir = os.path.dirname(video_path)
+
+    # 先用 ffmpeg 提取音频为 wav（demucs 需要音频输入）
+    audio_path = base + "_audio.wav"
+    if not os.path.exists(audio_path):
+        cmd_extract = [
+            "ffmpeg", "-i", video_path,
+            "-vn", "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2",
+            "-y", audio_path
+        ]
+        print("提取音频轨...")
+        subprocess.run(cmd_extract, check=True, capture_output=True)
+
+    # 用 demucs 分离（htdemucs 模型，双轨：vocals + no_vocals）
+    # 使用包装脚本 _run_demucs.py 绕过 torchaudio 2.10 对 torchcodec 的硬依赖
+    print("运行 demucs 音频分离（首次运行会下载模型）...")
+    wrapper = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_run_demucs.py")
+    cmd_demucs = [
+        sys.executable, wrapper,
+        "--two-stems", "vocals",
+        "-n", "htdemucs",
+        "-o", output_dir,
+        audio_path
+    ]
+    subprocess.run(cmd_demucs, check=True)
+
+    # demucs 输出结构：{output_dir}/htdemucs/{stem_name}/vocals.wav + no_vocals.wav
+    stem_name = Path(audio_path).stem
+    demucs_dir = os.path.join(output_dir, "htdemucs", stem_name)
+    no_vocals_path = os.path.join(demucs_dir, "no_vocals.wav")
+
+    if not os.path.exists(no_vocals_path):
+        raise FileNotFoundError(f"demucs 分离失败，未找到: {no_vocals_path}")
+
+    # 移动背景音到工作目录，清理 demucs 临时目录
+    import shutil
+    shutil.move(no_vocals_path, bg_path)
+    shutil.rmtree(os.path.join(output_dir, "htdemucs"), ignore_errors=True)
+
+    print(f"✅ 背景音已分离: {bg_path}")
+    return bg_path
+
+
+def step6_tts_generate(zh_srt_path, video_path):
+    """第六步：用 edge-tts 为中文字幕生成语音"""
+    print("\n" + "=" * 60)
+    print("🗣️  第六步：AI 语音合成（edge-tts）...")
+    print("=" * 60)
+
+    import asyncio
+    import edge_tts
+    from pydub import AudioSegment
+
+    base = video_path.rsplit(".", 1)[0]
+    tts_output = base + "_tts.wav"
+    if os.path.exists(tts_output):
+        print(f"⏭️  TTS 语音已存在，跳过: {tts_output}")
+        return tts_output
+
+    # 读取中文字幕
+    with open(zh_srt_path, encoding="utf-8") as f:
+        zh_subs = list(srt.parse(f.read()))
+
+    # 获取视频总时长（毫秒）
+    probe_cmd = [
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        video_path
+    ]
+    duration_s = float(subprocess.run(
+        probe_cmd, capture_output=True, text=True
+    ).stdout.strip() or "0")
+    total_ms = int(duration_s * 1000)
+    if total_ms <= 0:
+        total_ms = max(int(sub.end.total_seconds() * 1000) for sub in zh_subs) + 1000
+
+    # 创建空白静音底板
+    silence = AudioSegment.silent(duration=total_ms, frame_rate=44100)
+
+    # 临时目录存放单条 TTS 音频
+    tts_tmp_dir = base + "_tts_tmp"
+    os.makedirs(tts_tmp_dir, exist_ok=True)
+
+    async def _generate_one(sub, idx):
+        """为单条字幕生成 TTS 音频"""
+        text = sub.content.strip()
+        if not text:
+            return None
+
+        out_file = os.path.join(tts_tmp_dir, f"{idx:04d}.mp3")
+        if os.path.exists(out_file):
+            return out_file
+
+        communicate = edge_tts.Communicate(
+            text=text,
+            voice=TTS_VOICE,
+            rate=TTS_RATE,
+            volume=TTS_VOLUME,
+        )
+        await communicate.save(out_file)
+        return out_file
+
+    async def _generate_all():
+        tasks = []
+        for i, sub in enumerate(zh_subs):
+            tasks.append(_generate_one(sub, i))
+        return await asyncio.gather(*tasks)
+
+    print(f"生成 {len(zh_subs)} 条 TTS 语音（voice={TTS_VOICE}）...")
+    tts_files = asyncio.run(_generate_all())
+
+    # 将每条 TTS 音频按字幕时间位置叠加到静音底板
+    print("拼接 TTS 音频到时间轴...")
+    for i, (sub, tts_file) in enumerate(zip(zh_subs, tts_files)):
+        if tts_file is None or not os.path.exists(tts_file):
+            continue
+
+        clip = AudioSegment.from_file(tts_file)
+        start_ms = int(sub.start.total_seconds() * 1000)
+        end_ms = int(sub.end.total_seconds() * 1000)
+        available_ms = end_ms - start_ms
+
+        # 如果 TTS 音频比字幕时长长，用 ffmpeg atempo 加速适配
+        if len(clip) > available_ms and available_ms > 0:
+            speed = len(clip) / available_ms
+            if speed > TTS_MAX_SPEED:
+                speed = TTS_MAX_SPEED  # 限制最大加速倍率，避免语速过快
+            sped_file = os.path.join(tts_tmp_dir, f"{i:04d}_fast.wav")
+            cmd_speed = [
+                "ffmpeg", "-i", tts_file,
+                "-filter:a", f"atempo={speed:.3f}",
+                "-y", sped_file
+            ]
+            subprocess.run(cmd_speed, capture_output=True, check=True)
+            clip = AudioSegment.from_file(sped_file)
+
+        # 叠加到对应时间位置
+        silence = silence.overlay(clip, position=start_ms)
+
+        if (i + 1) % 20 == 0:
+            print(f"  已拼接 {i + 1}/{len(zh_subs)} 条...")
+
+    # 导出最终 TTS 音轨
+    silence.export(tts_output, format="wav")
+
+    # 清理临时文件
+    import shutil
+    shutil.rmtree(tts_tmp_dir, ignore_errors=True)
+
+    print(f"✅ TTS 语音已生成: {tts_output}")
+    return tts_output
+
+
+def step7_merge_audio(video_path, bg_path, tts_path):
+    """第七步：合并背景音 + TTS 语音，替换原视频音轨
+    video_path: 作为视频源的文件（可能是烧了字幕的版本，也可能是原始视频）
+    输出文件名与 video_path 同名，追加 _配音 后缀，确保 skip 判断不因换源而误判。
+    """
+    print("\n" + "=" * 60)
+    print("🎬 第七步：合并音频并生成配音视频...")
+    print("=" * 60)
+
+    base = video_path.rsplit(".", 1)[0]
+    mixed_audio = base + "_mixed.wav"
+    dubbed_video = base + "_配音.mp4"
+
+    if os.path.exists(dubbed_video):
+        print(f"⏭️  配音视频已存在，跳过: {dubbed_video}")
+        return dubbed_video
+
+    # 用 ffmpeg 混合背景音和 TTS 语音
+    # amix: 默认会 normalize，用 volume 先调低背景音量
+    bg_vol = TTS_BG_VOLUME
+    print(f"混合音频（背景音量: {bg_vol}）...")
+    cmd_mix = [
+        "ffmpeg",
+        "-i", tts_path,
+        "-i", bg_path,
+        "-filter_complex",
+        f"[1:a]volume={bg_vol}[bg];[0:a][bg]amix=inputs=2:duration=first:dropout_transition=2[out]",
+        "-map", "[out]",
+        "-acodec", "pcm_s16le",
+        "-ar", "44100",
+        "-y", mixed_audio
+    ]
+    subprocess.run(cmd_mix, check=True, capture_output=True)
+
+    # 用 ffmpeg 替换原视频的音轨
+    print("替换视频音轨...")
+    cmd_replace = [
+        "ffmpeg",
+        "-i", video_path,
+        "-i", mixed_audio,
+        "-c:v", "copy",
+        "-map", "0:v:0",
+        "-map", "1:a:0",
+        "-y", dubbed_video
+    ]
+    subprocess.run(cmd_replace, check=True, capture_output=True)
+
+    # 清理中间文件
+    for tmp in [mixed_audio]:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+    print(f"✅ 配音视频已生成: {dubbed_video}")
+    return dubbed_video
+
+
+def process_one(source, burn_subtitle=True, enable_dubbing=False):
     """处理单个视频源（本地文件或 YouTube 链接），返回输出文件路径字典"""
     is_local = os.path.isfile(source)
 
@@ -492,6 +737,58 @@ def process_one(source, burn_subtitle=True):
 
         print("🚀 开始处理（YouTube 下载模式）...")
         print(f"   视频链接: {url}")
+
+        # 提前获取标题，判断是否已下载过
+        try:
+            title_result = subprocess.run(
+                ["yt-dlp", "--print", "title", "--no-playlist", url],
+                capture_output=True, text=True, check=True
+            )
+            raw_title = title_result.stdout.strip()
+            pre_name = _sanitize_name(raw_title)
+            pre_dir  = os.path.join("./output", pre_name)
+            pre_file = os.path.join(pre_dir, pre_name + ".mp4")
+            if os.path.exists(pre_file):
+                print(f"⏭️  视频已存在，跳过下载: {pre_file}")
+                video_path = pre_file
+                output_dir = pre_dir
+                # 跳过下载后，直接执行后续步骤
+                print(f"   工作目录: {os.path.abspath(output_dir)}")
+                print(f"   语音识别: faster-whisper [{WHISPER_MODEL}] ← 本地 GPU")
+                print(f"   翻译引擎: Qwen3.5 API [{QWEN_MODEL}] ← 云端大模型")
+                en_srt_path, subs = step2_transcribe(video_path)
+                zh_srt_path, bi_srt_path = step3_translate(subs, video_path)
+
+                final_video = None
+                if burn_subtitle:
+                    final_video = step4_burn_subtitles(video_path, bi_srt_path)
+
+                dubbed_video = None
+                if enable_dubbing:
+                    bg_path = step5_separate_audio(video_path)
+                    tts_path = step6_tts_generate(zh_srt_path, video_path)
+                    # burn_subtitle 已勾选则用字幕视频，否则用原始视频
+                    dub_base = final_video if final_video and os.path.exists(final_video) else video_path
+                    dubbed_video = step7_merge_audio(dub_base, bg_path, tts_path)
+
+                print("\n" + "=" * 60)
+                print("🎉 处理完成！")
+                print("=" * 60)
+                print(f"  原始视频:   {video_path}")
+                print(f"  英文字幕:   {en_srt_path}")
+                print(f"  中文字幕:   {zh_srt_path}")
+                print(f"  双语字幕:   {bi_srt_path}")
+                if final_video:
+                    print(f"  最终视频:   {final_video}")
+                if dubbed_video:
+                    print(f"  配音视频:   {dubbed_video}")
+                return {
+                    "video": video_path, "en_srt": en_srt_path,
+                    "zh_srt": zh_srt_path, "bi_srt": bi_srt_path,
+                    "final_video": final_video, "dubbed_video": dubbed_video,
+                }
+        except Exception:
+            pass  # 获取标题失败则继续正常下载
 
         video_path = step1_download_video(url, temp_dir)
 
@@ -525,6 +822,14 @@ def process_one(source, burn_subtitle=True):
     if burn_subtitle:
         final_video = step4_burn_subtitles(video_path, bi_srt_path)
 
+    dubbed_video = None
+    if enable_dubbing:
+        bg_path = step5_separate_audio(video_path)
+        tts_path = step6_tts_generate(zh_srt_path, video_path)
+        # burn_subtitle 已勾选则用字幕视频，否则用原始视频
+        dub_base = final_video if final_video and os.path.exists(final_video) else video_path
+        dubbed_video = step7_merge_audio(dub_base, bg_path, tts_path)
+
     print("\n" + "=" * 60)
     print("🎉 处理完成！")
     print("=" * 60)
@@ -534,6 +839,8 @@ def process_one(source, burn_subtitle=True):
     print(f"  双语字幕:   {bi_srt_path}")
     if final_video:
         print(f"  最终视频:   {final_video}")
+    if dubbed_video:
+        print(f"  配音视频:   {dubbed_video}")
 
     return {
         "video": video_path,
@@ -541,6 +848,7 @@ def process_one(source, burn_subtitle=True):
         "zh_srt": zh_srt_path,
         "bi_srt": bi_srt_path,
         "final_video": final_video,
+        "dubbed_video": dubbed_video,
     }
 
 
