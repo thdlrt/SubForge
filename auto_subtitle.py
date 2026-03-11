@@ -297,8 +297,7 @@ def translate_batch_qwen(texts):
                     {"role": "user", "content": user_content}
                 ],
                 temperature=0.3,
-                max_tokens=2048,
-                extra_body={"enable_thinking": False},
+                max_tokens=4096,
             )
 
             result = response.choices[0].message.content.strip()

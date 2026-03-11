@@ -8,7 +8,7 @@
     "qwen_api_key": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
     "qwen_base_url": "https://your-api-endpoint/v1",
     "qwen_model": "qwen3.5-plus",
-    "translate_batch_size": 50,
+    "translate_batch_size": 30,
     "translate_concurrency": 10,
     "api_retry": 3,
     "api_sleep": 0.5,
