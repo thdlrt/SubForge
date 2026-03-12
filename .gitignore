@@ -16,3 +16,4 @@ models/
 # 系统文件
 .DS_Store
 Thumbs.db
+vscode-extensions.txt

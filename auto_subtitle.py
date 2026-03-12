@@ -39,7 +39,7 @@ def _load_config():
         "whisper_model": "medium",
         "device": "auto",
         "compute_type": "auto",
-        "video_language": "en",
+        "video_language": None,
         "max_video_height": 1080,
         "subtitle_max_gap_ms": 1500,
         "qwen_api_key": "",
@@ -107,10 +107,10 @@ ENHANCE_OUTSCALE       = _cfg["enhance_outscale"]
 # ========================================================
 
 
-SYSTEM_PROMPT = """You are a professional English-to-Chinese translator specializing in game development, computer graphics, and software engineering.
+SYSTEM_PROMPT = """You are a professional subtitle translator specializing in game development, computer graphics, and software engineering. You translate subtitles into fluent, natural Simplified Chinese regardless of the source language.
 
 Rules:
-1. Translate the given English subtitle lines into fluent, natural Simplified Chinese.
+1. Detect the source language automatically and translate into Simplified Chinese.
 2. Keep technical terms accurate. Examples:
    - "shader" → "着色器", "rendering pipeline" → "渲染管线", "mesh" → "网格"
    - "frame rate" → "帧率", "occlusion culling" → "遮挡剔除"
@@ -347,14 +347,14 @@ def step1b_enhance_video(video_path):
 
 
 def step2_transcribe(video_path):
-    """第二步：用 Whisper 识别语音，生成英文字幕"""
+    """第二步：用 Whisper 识别语音，生成外语字幕"""
     print("\n" + "=" * 60)
-    print("🎤 第二步：语音识别生成英文字幕（本地 GPU）...")
+    print("🎤 第二步：语音识别生成外语字幕（本地 GPU）...")
     print("=" * 60)
 
     en_srt_path = video_path.rsplit(".", 1)[0] + "_en.srt"
     if os.path.exists(en_srt_path):
-        print(f"⏭️  英文字幕已存在，跳过转录: {en_srt_path}")
+        print(f"⏭️  外语字幕已存在，跳过转录: {en_srt_path}")
         with open(en_srt_path, encoding="utf-8") as f:
             subs = list(srt.parse(f.read()))
         print(f"   ↳ 共读取 {len(subs)} 条字幕")
@@ -366,9 +366,14 @@ def step2_transcribe(video_path):
     model = WhisperModel(WHISPER_MODEL, device=DEVICE, compute_type=COMPUTE_TYPE)
 
     print("开始转录...")
+    lang_arg = VIDEO_LANGUAGE if VIDEO_LANGUAGE else None
+    if lang_arg:
+        print(f"指定识别语言: {lang_arg}")
+    else:
+        print("语言设置为 null，将自动检测...")
     segments, info = model.transcribe(
         video_path,
-        language=VIDEO_LANGUAGE,
+        language=lang_arg,
         vad_filter=True,
         vad_parameters=dict(min_silence_duration_ms=500),
         word_timestamps=True,
@@ -418,10 +423,22 @@ def step2_transcribe(video_path):
         if idx % 20 == 0 and idx > 0:
             print(f"  已处理 {idx} 条字幕...")
 
+    # 显式释放 Whisper 模型，避免 GPU 显存残留导致后续步骤被 OS 静默终止
+    del model, raw_segs
+    import gc
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            print("  ↳ GPU 显存已释放")
+    except ImportError:
+        pass
+
     with open(en_srt_path, "w", encoding="utf-8") as f:
         f.write(srt.compose(subs))
 
-    print(f"✅ 英文字幕已生成: {en_srt_path} (共 {len(subs)} 条)")
+    print(f"✅ 外语字幕已生成: {en_srt_path} (共 {len(subs)} 条)")
     return en_srt_path, subs
 
 
@@ -484,7 +501,7 @@ def translate_one_by_one(texts):
             response = client.chat.completions.create(
                 model=QWEN_MODEL,
                 messages=[
-                    {"role": "system", "content": "将以下英文翻译成简体中文，只输出翻译结果："},
+                    {"role": "system", "content": "将以下字幕翻译成简体中文，只输出翻译结果，不加任何说明："},
                     {"role": "user", "content": text}
                 ],
                 temperature=0.3,
@@ -610,6 +627,7 @@ def step4_burn_subtitles(video_path, srt_path):
 
     cmd = [
         "ffmpeg",
+        "-hide_banner", "-loglevel", "warning", "-stats",
         "-i", video_path,
         "-vf", subtitle_filter,
         "-c:v", "libx264",
@@ -969,43 +987,76 @@ def process_one(source, burn_subtitle=True, enable_dubbing=False, enable_enhance
     print(f"   语音识别: faster-whisper [{WHISPER_MODEL}] ← 本地 GPU")
     print(f"   翻译引擎: Qwen3.5 API [{QWEN_MODEL}] ← 云端大模型")
 
-    if enable_enhance:
-        video_path = step1b_enhance_video(video_path)
+    # 步骤追踪
+    current_step = "初始化"
+    en_srt_path = zh_srt_path = bi_srt_path = None
+    final_video = dubbed_video = None
 
-    en_srt_path, subs = step2_transcribe(video_path)
-    zh_srt_path, bi_srt_path = step3_translate(subs, video_path)
+    try:
+        if enable_enhance:
+            current_step = "1.5-AI画质增强"
+            video_path = step1b_enhance_video(video_path)
 
-    final_video = None
-    if burn_subtitle:
-        final_video = step4_burn_subtitles(video_path, bi_srt_path)
+        current_step = "2-语音识别"
+        en_srt_path, subs = step2_transcribe(video_path)
 
-    dubbed_video = None
-    if enable_dubbing:
-        bg_path = step5_separate_audio(video_path)
-        tts_path = step6_tts_generate(zh_srt_path, video_path)
-        # burn_subtitle 已勾选则用字幕视频，否则用原始视频
-        dub_base = final_video if final_video and os.path.exists(final_video) else video_path
-        dubbed_video = step7_merge_audio(dub_base, bg_path, tts_path)
+        current_step = "3-翻译字幕"
+        zh_srt_path, bi_srt_path = step3_translate(subs, video_path)
+
+        if burn_subtitle:
+            current_step = "4-压制字幕"
+            final_video = step4_burn_subtitles(video_path, bi_srt_path)
+
+        if enable_dubbing:
+            current_step = "5-分离音频"
+            bg_path = step5_separate_audio(video_path)
+            current_step = "6-TTS语音合成"
+            tts_path = step6_tts_generate(zh_srt_path, video_path)
+            current_step = "7-合并配音"
+            dub_base = final_video if final_video and os.path.exists(final_video) else video_path
+            dubbed_video = step7_merge_audio(dub_base, bg_path, tts_path)
+
+        current_step = "完成"
+    except Exception as e:
+        print(f"\n❌ 在步骤 [{current_step}] 失败: {e}")
+        return {
+            "source": source,
+            "video": video_path,
+            "en_srt": en_srt_path,
+            "zh_srt": zh_srt_path,
+            "bi_srt": bi_srt_path,
+            "final_video": final_video,
+            "dubbed_video": dubbed_video,
+            "status": "失败",
+            "last_step": current_step,
+            "error": str(e),
+        }
 
     print("\n" + "=" * 60)
     print("🎉 处理完成！")
     print("=" * 60)
     print(f"  原始视频:   {video_path}")
-    print(f"  英文字幕:   {en_srt_path}")
-    print(f"  中文字幕:   {zh_srt_path}")
-    print(f"  双语字幕:   {bi_srt_path}")
+    if en_srt_path:
+        print(f"  外语字幕:   {en_srt_path}")
+    if zh_srt_path:
+        print(f"  中文字幕:   {zh_srt_path}")
+    if bi_srt_path:
+        print(f"  双语字幕:   {bi_srt_path}")
     if final_video:
         print(f"  最终视频:   {final_video}")
     if dubbed_video:
         print(f"  配音视频:   {dubbed_video}")
 
     return {
+        "source": source,
         "video": video_path,
         "en_srt": en_srt_path,
         "zh_srt": zh_srt_path,
         "bi_srt": bi_srt_path,
         "final_video": final_video,
         "dubbed_video": dubbed_video,
+        "status": "成功",
+        "last_step": "完成",
     }
 
 
@@ -1030,22 +1081,47 @@ def main():
     sources = sys.argv[1:]
     total = len(sources)
 
+    results = []
     if total == 1:
-        process_one(sources[0])
+        results.append(process_one(sources[0]))
     else:
         print(f"📋 批量模式：共 {total} 个任务")
         for i, src in enumerate(sources, 1):
             print("\n" + "#" * 60)
             print(f"## 任务 [{i}/{total}]: {src}")
             print("#" * 60)
-            try:
-                process_one(src)
-            except Exception as e:
-                print(f"\n❌ 任务 [{i}/{total}] 处理失败: {e}")
-                print("跳过此任务，继续处理下一个...")
-        print("\n" + "=" * 60)
-        print(f"📋 批量处理全部结束（共 {total} 个任务）")
-        print("=" * 60)
+            results.append(process_one(src))
+
+    _print_summary(results)
+
+
+def _print_summary(results):
+    """打印所有任务的执行结果汇总表"""
+    if not results:
+        return
+    print("\n" + "=" * 60)
+    print("📋 执行结果汇总")
+    print("=" * 60)
+    success = sum(1 for r in results if r and r.get("status") == "成功")
+    fail    = len(results) - success
+    for i, r in enumerate(results, 1):
+        if not r:
+            print(f"  [{i}] ❌ 未知错误（无返回结果）")
+            continue
+        source = r.get("source", "?")
+        # 截短显示
+        name = os.path.basename(source) if os.path.isfile(source) else source
+        if len(name) > 50:
+            name = name[:47] + "..."
+        status = r.get("status", "未知")
+        step   = r.get("last_step", "?")
+        if status == "成功":
+            print(f"  [{i}] ✅ {name}  →  全部完成")
+        else:
+            err = r.get("error", "")
+            print(f"  [{i}] ❌ {name}  →  失败于 [{step}]: {err}")
+    print(f"\n  合计: {success} 成功 / {fail} 失败 / {len(results)} 总计")
+    print("=" * 60)
 
 
 if __name__ == "__main__":

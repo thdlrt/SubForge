@@ -64,26 +64,24 @@ def _run_processing(sources, burn_subtitle, enable_dubbing, enable_enhance):
         sys.stderr = _TeeStream(old_stderr, log_q)
         try:
             total = len(sources)
+            all_results = []
             for i, src in enumerate(sources):
                 if total > 1:
                     print(f"\n{'#' * 60}")
                     print(f"## 任务 [{i + 1}/{total}]: {src}")
                     print("#" * 60)
-                try:
-                    result = auto_subtitle.process_one(
-                        src, burn_subtitle=burn_subtitle, enable_dubbing=enable_dubbing,
-                        enable_enhance=enable_enhance
-                    )
-                    if result:
-                        for key in ("en_srt", "zh_srt", "bi_srt", "final_video", "dubbed_video"):
-                            path = result.get(key)
-                            if path and os.path.exists(path):
-                                result_files.append(path)
-                except Exception as e:
-                    print(f"\n❌ 处理失败: {e}")
+                result = auto_subtitle.process_one(
+                    src, burn_subtitle=burn_subtitle, enable_dubbing=enable_dubbing,
+                    enable_enhance=enable_enhance
+                )
+                all_results.append(result)
+                if result:
+                    for key in ("en_srt", "zh_srt", "bi_srt", "final_video", "dubbed_video"):
+                        path = result.get(key)
+                        if path and os.path.exists(path):
+                            result_files.append(path)
 
-            if total > 1:
-                print(f"\n📋 批量处理全部结束（共 {total} 个任务）")
+            auto_subtitle._print_summary(all_results)
         finally:
             sys.stdout = old_stdout
             sys.stderr = old_stderr

@@ -2,7 +2,7 @@
     "whisper_model": "medium",
     "device": "auto",
     "compute_type": "auto",
-    "video_language": "en",
+    "video_language": null,
     "max_video_height": 1080,
     "subtitle_max_gap_ms": 1500,
     "qwen_api_key": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
