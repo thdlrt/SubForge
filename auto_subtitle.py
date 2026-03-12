@@ -42,7 +42,9 @@ def _load_config():
         "video_language": None,
         "max_video_height": 1080,
         "ytdlp_cookies": "",
+        "ytdlp_client": "",
         "subtitle_max_gap_ms": 1500,
+        "subtitle_max_chars": 80,
         "qwen_api_key": "",
         "qwen_base_url": "",
         "qwen_model": "qwen3.5-plus",
@@ -84,7 +86,9 @@ COMPUTE_TYPE           = _cfg["compute_type"]
 VIDEO_LANGUAGE         = _cfg["video_language"]
 MAX_VIDEO_HEIGHT       = _cfg["max_video_height"]
 YTDLP_COOKIES          = _cfg["ytdlp_cookies"]
+YTDLP_CLIENT           = _cfg["ytdlp_client"]
 SUBTITLE_MAX_GAP_MS    = _cfg["subtitle_max_gap_ms"]
+SUBTITLE_MAX_CHARS     = _cfg["subtitle_max_chars"]
 QWEN_API_KEY           = _cfg["qwen_api_key"]
 QWEN_BASE_URL          = _cfg["qwen_base_url"]
 QWEN_MODEL             = _cfg["qwen_model"]
@@ -122,6 +126,24 @@ Rules:
 6. The number of output lines MUST exactly match the number of input lines."""
 
 
+def _ytdlp_extra_args():
+    """返回 yt-dlp 的 cookie + client 参数列表"""
+    args = []
+    if YTDLP_CLIENT:
+        args += ["--extractor-args", f"youtube:player_client={YTDLP_CLIENT}"]
+        print(f"   YouTube 客户端: {YTDLP_CLIENT}")
+    if not YTDLP_COOKIES:
+        return args
+    if os.path.isfile(YTDLP_COOKIES):
+        print(f"   使用 cookies 文件: {YTDLP_COOKIES}")
+        return args + ["--cookies", YTDLP_COOKIES]
+    if os.path.sep not in YTDLP_COOKIES and "/" not in YTDLP_COOKIES and not YTDLP_COOKIES.endswith(".txt"):
+        print(f"   从浏览器读取 cookies: {YTDLP_COOKIES}")
+        return args + ["--cookies-from-browser", YTDLP_COOKIES]
+    print(f"   ⚠ cookies 文件不存在: {YTDLP_COOKIES}，将不使用 cookies")
+    return args
+
+
 def step1_download_video(url, output_dir):
     """第一步：下载 YouTube 视频"""
     print("\n" + "=" * 60)
@@ -143,11 +165,7 @@ def step1_download_video(url, output_dir):
         "-o", output_template,
         "--no-playlist",
     ]
-    if YTDLP_COOKIES and os.path.isfile(YTDLP_COOKIES):
-        cmd += ["--cookies", YTDLP_COOKIES]
-        print(f"   使用 cookies 文件: {YTDLP_COOKIES}")
-    elif YTDLP_COOKIES:
-        print(f"   ⚠ cookies 文件不存在: {YTDLP_COOKIES}，将不使用 cookies")
+    cmd += _ytdlp_extra_args()
     cmd.append(url)
 
     subprocess.run(cmd, check=True)
@@ -389,9 +407,41 @@ def step2_transcribe(video_path):
     print(f"检测到语言: {info.language}, 置信度: {info.language_probability:.2f}")
 
     gap_threshold = SUBTITLE_MAX_GAP_MS / 1000.0  # 转为秒
-    raw_segs = list(segments)
+    max_chars = SUBTITLE_MAX_CHARS
+    _PUNCT_BREAK = frozenset('.?!,;:…，。？！；：、')
+    # 逐段收集，使 Ctrl+C 可在段间打断（list() 会在 C++ 内部阻塞直到全部完成）
+    raw_segs = []
+    try:
+        for seg in segments:
+            raw_segs.append(seg)
+    except KeyboardInterrupt:
+        del model
+        import gc; gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
+        raise
     subs = []
     idx = 0
+
+    def _flush_chunk(chunk):
+        """将一组词生成一条字幕"""
+        nonlocal idx
+        if not chunk:
+            return
+        idx += 1
+        text = "".join(w.word for w in chunk).strip()
+        text = text.rstrip('.?!,;:…，。？！；：、')
+        subs.append(srt.Subtitle(
+            index=idx,
+            start=timedelta(seconds=chunk[0].start),
+            end=timedelta(seconds=chunk[-1].end),
+            content=text
+        ))
+
     for seg in raw_segs:
         words = seg.words if seg.words else []
         if not words:
@@ -404,29 +454,67 @@ def step2_transcribe(video_path):
                 content=seg.text.strip()
             ))
         else:
-            # 按词间间隙分割字幕
+            # 按词间间隙 + 最大字符数分割字幕
+            # 字符超限时双向搜索最近标点，优先向前回退，其次向后预读
+            LOOK_BACK = 8   # 向前（chunk 内回退）最多搜几个词
+            LOOK_AHEAD = 2  # 向后（预读后续词）最多搜几个词
             chunk_words = [words[0]]
-            for w_prev, w_curr in zip(words[:-1], words[1:]):
-                if w_curr.start - w_prev.end > gap_threshold:
-                    # 间隙过大，当前 chunk 生成一条字幕
-                    idx += 1
-                    subs.append(srt.Subtitle(
-                        index=idx,
-                        start=timedelta(seconds=chunk_words[0].start),
-                        end=timedelta(seconds=chunk_words[-1].end),
-                        content="".join(w.word for w in chunk_words).strip()
-                    ))
+            chunk_len = len(words[0].word.strip())
+            wi = 1
+            while wi < len(words):
+                w_prev = words[wi - 1]
+                w_curr = words[wi]
+                word_text = w_curr.word.strip()
+                gap_break = w_curr.start - w_prev.end > gap_threshold
+                len_break = chunk_len + len(word_text) > max_chars
+
+                if gap_break:
+                    _flush_chunk(chunk_words)
                     chunk_words = []
+                    chunk_len = 0
+                elif len_break:
+                    # ── 向前搜：在已有 chunk 中回退找标点 ──────────────
+                    back_at = -1
+                    search_back_from = len(chunk_words) - 1
+                    search_back_to   = max(0, len(chunk_words) - LOOK_BACK)
+                    for bi in range(search_back_from, search_back_to - 1, -1):
+                        if chunk_words[bi].word.rstrip()[-1:] in _PUNCT_BREAK:
+                            back_at = bi
+                            break
+
+                    if back_at >= 0:
+                        _flush_chunk(chunk_words[:back_at + 1])
+                        chunk_words = chunk_words[back_at + 1:]
+                        chunk_len = sum(len(w.word.strip()) for w in chunk_words)
+                        # w_curr 正常追加到下面
+                    else:
+                        # ── 向后搜：预读后续词找标点 ──────────────────
+                        ahead_at = -1
+                        for ai in range(wi, min(len(words), wi + LOOK_AHEAD)):
+                            if words[ai].word.rstrip()[-1:] in _PUNCT_BREAK:
+                                ahead_at = ai
+                                break
+
+                        if ahead_at >= 0:
+                            # 接受到标点词（含），再断句
+                            for j in range(wi, ahead_at + 1):
+                                chunk_words.append(words[j])
+                                chunk_len += len(words[j].word.strip())
+                            _flush_chunk(chunk_words)
+                            chunk_words = []
+                            chunk_len = 0
+                            wi = ahead_at + 1
+                            continue  # wi 已更新，跳过末尾追加
+                        else:
+                            # 两侧都没找到标点 → 直接在当前位置截断（无需标点结尾）
+                            _flush_chunk(chunk_words)
+                            chunk_words = []
+                            chunk_len = 0
+
                 chunk_words.append(w_curr)
-            # 最后一个 chunk
-            if chunk_words:
-                idx += 1
-                subs.append(srt.Subtitle(
-                    index=idx,
-                    start=timedelta(seconds=chunk_words[0].start),
-                    end=timedelta(seconds=chunk_words[-1].end),
-                    content="".join(w.word for w in chunk_words).strip()
-                ))
+                chunk_len += len(word_text)
+                wi += 1
+            _flush_chunk(chunk_words)
         if idx % 20 == 0 and idx > 0:
             print(f"  已处理 {idx} 条字幕...")
 
@@ -508,7 +596,7 @@ def translate_one_by_one(texts):
             response = client.chat.completions.create(
                 model=QWEN_MODEL,
                 messages=[
-                    {"role": "system", "content": "将以下字幕翻译成简体中文，只输出翻译结果，不加任何说明："},
+                    {"role": "system", "content": "将以下英文翻译成简体中文，只输出翻译结果："},
                     {"role": "user", "content": text}
                 ],
                 temperature=0.3,
@@ -557,7 +645,8 @@ def step3_translate(subs, video_path):
         texts = [sub.content for sub in batch]
         return batch_start, translate_batch_qwen(texts)
 
-    with ThreadPoolExecutor(max_workers=TRANSLATE_CONCURRENCY) as executor:
+    executor = ThreadPoolExecutor(max_workers=TRANSLATE_CONCURRENCY)
+    try:
         futures = {
             executor.submit(_translate_batch, bs, batch): bs
             for bs, batch in batches
@@ -569,6 +658,14 @@ def step3_translate(subs, video_path):
             done_subs = min(batch_start + TRANSLATE_BATCH_SIZE, total)
             print(f"  ✅ 批次 {batch_start // TRANSLATE_BATCH_SIZE + 1}/{batch_count} 完成 "
                   f"(字幕 {batch_start + 1}–{done_subs})  [{completed}/{batch_count} 批已完成]")
+    except KeyboardInterrupt:
+        print("\n⚠️  翻译被中断，取消剩余批次...")
+        for f in futures:
+            f.cancel()
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    else:
+        executor.shutdown(wait=True)
 
     # 按原始顺序拼装翻译结果
     translated_subs = []
@@ -918,83 +1015,114 @@ def step7_merge_audio(video_path, bg_path, tts_path):
     return dubbed_video
 
 
-def process_one(source, burn_subtitle=True, enable_dubbing=False, enable_enhance=False):
-    """处理单个视频源（本地文件或 YouTube 链接），返回输出文件路径字典"""
+def _prepare_source(source):
+    """第一阶段：准备视频（下载或准备本地文件），返回已准备好的视频信息字典。
+    成功时包含 video_path / output_dir；失败时 status='失败' 且 video_path=None。"""
     is_local = os.path.isfile(source)
-
-    if is_local:
-        # 本地文件模式：直接使用，跳过下载
-        video_path = os.path.abspath(source)
-        video_name = _sanitize_name(Path(video_path).stem)
-        output_dir = os.path.join("./output", video_name)
-        os.makedirs(output_dir, exist_ok=True)
-
-        # 如果视频不在工作目录里，复制一份过去（保持所有产物集中）
-        # 目标使用净化后的文件名，避免特殊字符影响后续步骤
-        safe_filename = video_name + Path(video_path).suffix
-        target_path = os.path.join(output_dir, safe_filename)
-        if os.path.abspath(video_path) != os.path.abspath(target_path):
-            import shutil
-            if not os.path.exists(target_path):
-                shutil.copy2(video_path, target_path)
-            video_path = target_path
-
-        print("🚀 开始处理（本地文件模式）...")
-        print(f"   视频文件: {video_path}")
-    else:
-        # YouTube 下载模式：先下载到临时目录，再用视频名创建子目录
-        url = source
-        temp_dir = "./output/_temp_download"
-        os.makedirs(temp_dir, exist_ok=True)
-
-        print("🚀 开始处理（YouTube 下载模式）...")
-        print(f"   视频链接: {url}")
-
-        # 提前获取标题，判断是否已下载过（仅捕获标题获取失败，不吞处理异常）
-        pre_file = None
-        try:
-            title_result = subprocess.run(
-                ["yt-dlp", "--print", "title", "--no-playlist", url],
-                capture_output=True, text=True, check=True
-            )
-            raw_title = title_result.stdout.strip()
-            pre_name = _sanitize_name(raw_title)
-            pre_dir  = os.path.join("./output", pre_name)
-            pre_file = os.path.join(pre_dir, pre_name + ".mp4")
-        except Exception:
-            pass  # 获取标题失败则继续正常下载
-
-        if pre_file and os.path.exists(pre_file):
-            print(f"⏭️  视频已存在，跳过下载: {pre_file}")
-            video_path = pre_file
-            output_dir = pre_dir
-        else:
-            video_path = step1_download_video(url, temp_dir)
-
-            # 用净化后的视频名创建专属工作目录，同时重命名文件
+    try:
+        if is_local:
+            video_path = os.path.abspath(source)
             video_name = _sanitize_name(Path(video_path).stem)
             output_dir = os.path.join("./output", video_name)
             os.makedirs(output_dir, exist_ok=True)
 
-            # 移动并重命名视频到工作目录
             safe_filename = video_name + Path(video_path).suffix
             target_path = os.path.join(output_dir, safe_filename)
             if os.path.abspath(video_path) != os.path.abspath(target_path):
                 import shutil
-                shutil.move(video_path, target_path)
+                if not os.path.exists(target_path):
+                    shutil.copy2(video_path, target_path)
                 video_path = target_path
 
-            # 清理临时目录（如果空了）
+            print(f"📁 本地文件已准备: {video_path}")
+        else:
+            url = source
+            temp_dir = "./output/_temp_download"
+            os.makedirs(temp_dir, exist_ok=True)
+
+            print(f"📥 下载视频: {url}")
+
+            pre_file = None
             try:
-                os.rmdir(temp_dir)
-            except OSError:
+                pre_cmd = ["yt-dlp", "--print", "title", "--no-playlist"]
+                pre_cmd += _ytdlp_extra_args()
+                pre_cmd.append(url)
+                title_result = subprocess.run(
+                    pre_cmd,
+                    capture_output=True, text=True, check=True
+                )
+                raw_title = title_result.stdout.strip()
+                pre_name = _sanitize_name(raw_title)
+                pre_dir  = os.path.join("./output", pre_name)
+                pre_file = os.path.join(pre_dir, pre_name + ".mp4")
+            except Exception:
                 pass
 
-    print(f"   工作目录: {os.path.abspath(output_dir)}")
+            if pre_file and os.path.exists(pre_file):
+                print(f"⏭️  视频已存在，跳过下载: {pre_file}")
+                video_path = pre_file
+                output_dir = pre_dir
+            else:
+                video_path = step1_download_video(url, temp_dir)
+
+                video_name = _sanitize_name(Path(video_path).stem)
+                output_dir = os.path.join("./output", video_name)
+                os.makedirs(output_dir, exist_ok=True)
+
+                safe_filename = video_name + Path(video_path).suffix
+                target_path = os.path.join(output_dir, safe_filename)
+                if os.path.abspath(video_path) != os.path.abspath(target_path):
+                    import shutil
+                    shutil.move(video_path, target_path)
+                    video_path = target_path
+
+                try:
+                    os.rmdir(temp_dir)
+                except OSError:
+                    pass
+
+        return {
+            "source": source,
+            "video_path": video_path,
+            "output_dir": output_dir,
+            "status": "已下载",
+            "error": None,
+        }
+    except Exception as e:
+        print(f"\n❌ 下载/准备视频失败: {e}")
+        return {
+            "source": source,
+            "video_path": None,
+            "output_dir": None,
+            "status": "失败",
+            "last_step": "1-下载",
+            "error": str(e),
+        }
+
+
+def _process_prepared(prepared, burn_subtitle=True, enable_dubbing=False, enable_enhance=False):
+    """第二阶段：处理已下载的视频（识别 → 翻译 → 压制字幕 → 配音）。
+    接受 _prepare_source() 返回的字典；若准备阶段已失败则直接透传错误结果。"""
+    source = prepared["source"]
+
+    if prepared.get("status") == "失败":
+        return {
+            "source": source,
+            "video": None,
+            "en_srt": None, "zh_srt": None, "bi_srt": None,
+            "final_video": None, "dubbed_video": None,
+            "status": "失败",
+            "last_step": prepared.get("last_step", "1-下载"),
+            "error": prepared.get("error", "下载失败"),
+        }
+
+    video_path = prepared["video_path"]
+    output_dir = prepared["output_dir"]
+
+    print(f"\n   工作目录: {os.path.abspath(output_dir)}")
     print(f"   语音识别: faster-whisper [{WHISPER_MODEL}] ← 本地 GPU")
     print(f"   翻译引擎: Qwen3.5 API [{QWEN_MODEL}] ← 云端大模型")
 
-    # 步骤追踪
     current_step = "初始化"
     en_srt_path = zh_srt_path = bi_srt_path = None
     final_video = dubbed_video = None
@@ -1067,6 +1195,14 @@ def process_one(source, burn_subtitle=True, enable_dubbing=False, enable_enhance
     }
 
 
+def process_one(source, burn_subtitle=True, enable_dubbing=False, enable_enhance=False):
+    """处理单个视频源（本地文件或 YouTube 链接）。
+    组合 _prepare_source + _process_prepared，保持向后兼容。"""
+    prepared = _prepare_source(source)
+    return _process_prepared(prepared, burn_subtitle=burn_subtitle,
+                             enable_dubbing=enable_dubbing, enable_enhance=enable_enhance)
+
+
 def main():
     if len(sys.argv) < 2:
         print("用法:")
@@ -1088,18 +1224,38 @@ def main():
     sources = sys.argv[1:]
     total = len(sources)
 
-    results = []
-    if total == 1:
-        results.append(process_one(sources[0]))
-    else:
-        print(f"📋 批量模式：共 {total} 个任务")
-        for i, src in enumerate(sources, 1):
-            print("\n" + "#" * 60)
-            print(f"## 任务 [{i}/{total}]: {src}")
-            print("#" * 60)
-            results.append(process_one(src))
+    try:
+        results = []
+        if total == 1:
+            results.append(process_one(sources[0]))
+        else:
+            print(f"📋 批量模式：共 {total} 个任务，使用两阶段策略")
 
-    _print_summary(results)
+            print("\n" + "=" * 60)
+            print(f"🌐 第一阶段：批量下载全部视频（共 {total} 个）")
+            print("=" * 60)
+            prepared_list = []
+            for i, src in enumerate(sources, 1):
+                print(f"\n── 下载 [{i}/{total}]: {src}")
+                prepared_list.append(_prepare_source(src))
+
+            dl_ok  = sum(1 for p in prepared_list if p.get("status") != "失败")
+            dl_fail = total - dl_ok
+            print(f"\n✅ 下载阶段完成：{dl_ok} 成功 / {dl_fail} 失败 / {total} 总计")
+
+            print("\n" + "=" * 60)
+            print("⚙️  第二阶段：批量处理（识别 → 翻译 → 压制字幕）")
+            print("=" * 60)
+            for i, prepared in enumerate(prepared_list, 1):
+                print("\n" + "#" * 60)
+                print(f"## 任务 [{i}/{total}]: {prepared['source']}")
+                print("#" * 60)
+                results.append(_process_prepared(prepared))
+
+        _print_summary(results)
+    except KeyboardInterrupt:
+        print("\n\n⚠️  已中断（Ctrl+C），退出")
+        os._exit(130)
 
 
 def _print_summary(results):
@@ -1115,9 +1271,8 @@ def _print_summary(results):
         if not r:
             print(f"  [{i}] ❌ 未知错误（无返回结果）")
             continue
-        source = r.get("source", "?")
-        # 截短显示
-        name = os.path.basename(source) if os.path.isfile(source) else source
+        source = r.get("source", r.get("video", "?"))
+        name = os.path.basename(source) if os.path.isfile(str(source)) else source
         if len(name) > 50:
             name = name[:47] + "..."
         status = r.get("status", "未知")

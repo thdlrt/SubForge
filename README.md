@@ -168,13 +168,13 @@ output/
 | `compute_type` | `"auto"` | `auto` / `float16` / `int8` / `float32` | 推理精度，GPU 推荐 `float16`，CPU 推荐 `int8` |
 | `video_language` | `"en"` | `en` / `zh` / `ja` / `ko` / `fr` / `de` / `es` / `ru` / `auto` | 视频语言，`auto` 自动检测（速度稍慢） |
 | `subtitle_max_gap_ms` | `1500` | 500~5000 | 词级时间戳间隙阈值（毫秒），超过此值自动断开为新字幕，用于解决音乐/长静音导致的跨段粘连 |
+| `subtitle_max_chars` | `80` | 30~200 | 单条字幕最大字符数。连续说话无停顿时，累计字符超过此值自动断行，避免出现超长字幕 |
 
 ### 下载
 
 | 参数 | 默认值 | 可选值 | 说明 |
 |------|--------|--------|------|
-| `max_video_height` | `1080` | `720` / `1080` / `1440` / `2160` | YouTube 下载的最大分辨率 |
-| `ytdlp_cookies` | `""` | 文件路径字符串 | Netscape 格式的 cookies 文件路径（解决 YouTube 要求登录验证的问题），留空则不使用 |
+| `max_video_height` | `1080` | `720` / `1080` / `1440` / `2160` | YouTube 下载的最大分辨率 || `ytdlp_client` | `""` | `ios` / `tv_embedded` / `web` / `""` | 模拟的 YouTube 客户端类型。`ios` 和 `tv_embedded` 有时可绕过 bot 检测；留空则使用默认 web 客户端 || `ytdlp_cookies` | `\"\"` | 文件路径或浏览器名 | cookies 配置，支持两种模式（见下方说明）：填文件路径如 `\"./cookies.txt\"` 使用导出的 cookies 文件；填浏览器名如 `\"edge\"` 直接从浏览器读取。留空则不使用 |
 
 ### 翻译 API
 
@@ -223,11 +223,23 @@ output/
 
 ### YouTube 提示「Sign in to confirm you're not a bot」
 
-YouTube 对部分 IP 或视频要求登录认证，yt-dlp 会报错 `Sign in to confirm you're not a bot`。
+YouTube 对部分 IP 或视频启用 bot 检测，yt-dlp 会报错 `Sign in to confirm you're not a bot`，需要配置 cookies 供 yt-dlp 使用。
 
-**解决方法：导出浏览器 cookies 供 yt-dlp 使用。**
+**配置 cookies 的两种模式：**
 
-#### 方法一：浏览器扩展导出（推荐，适合普通用户）
+#### 模式一：从浏览器自动读取（需关闭浏览器）
+
+在 `config.json` 中填写浏览器名称：
+
+```json
+"ytdlp_cookies": "edge"
+```
+
+支持的浏览器名：`edge`、`chrome`、`firefox`、`opera`、`brave`、`vivaldi` 等。
+
+> **注意**：浏览器运行时 SQLite 数据库被锁，必须**关闭浏览器**后再运行才能读取成功。
+
+#### 模式二：导出 cookies 文件（浏览器不需要关闭）
 
 1. 在 Chrome / Edge 中安装扩展 [**Get cookies.txt LOCALLY**](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)
 2. 打开 [youtube.com](https://www.youtube.com) 并**确保已登录账号**
@@ -238,19 +250,10 @@ YouTube 对部分 IP 或视频要求登录认证，yt-dlp 会报错 `Sign in to 
    "ytdlp_cookies": "./cookies.txt"
    ```
 
-#### 方法二：yt-dlp 直接从浏览器读取（无需手动导出）
-
-yt-dlp 支持直接读取已安装浏览器的 cookies，**但此方式不支持通过 config.json 配置**，需要临时在命令行使用：
-
-```bash
-yt-dlp --cookies-from-browser chrome "https://www.youtube.com/watch?v=XXXXX"
-# 或 edge / firefox / opera 等
-```
-
 #### 注意事项
 
 - cookies 文件包含账号登录信息，**请勿分享或提交到 Git**（`config.json` 已在 `.gitignore` 中，cookies 路径只存在于本机 `config.json` 里）
-- cookies 有有效期，若下载再次报认证错误，重新导出一次即可
+- 导出的 cookies 文件有效期较短（通常几小时到几天），若下载再次报认证错误，重新导出一次即可。推荐使用模式一（从浏览器自动读取）以免反复导出
 - 建议创建一个专用的小号用于导出 cookies，避免主账号暴露
 
 ### demucs 分离音频时报 torchcodec / torchaudio 错误

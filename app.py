@@ -65,14 +65,12 @@ def _run_processing(sources, burn_subtitle, enable_dubbing, enable_enhance):
         try:
             total = len(sources)
             all_results = []
-            for i, src in enumerate(sources):
-                if total > 1:
-                    print(f"\n{'#' * 60}")
-                    print(f"## 任务 [{i + 1}/{total}]: {src}")
-                    print("#" * 60)
+
+            if total == 1:
+                # 单任务：直接走原流程，无需两阶段
                 result = auto_subtitle.process_one(
-                    src, burn_subtitle=burn_subtitle, enable_dubbing=enable_dubbing,
-                    enable_enhance=enable_enhance
+                    sources[0], burn_subtitle=burn_subtitle,
+                    enable_dubbing=enable_dubbing, enable_enhance=enable_enhance
                 )
                 all_results.append(result)
                 if result:
@@ -80,6 +78,41 @@ def _run_processing(sources, burn_subtitle, enable_dubbing, enable_enhance):
                         path = result.get(key)
                         if path and os.path.exists(path):
                             result_files.append(path)
+            else:
+                # 多任务：两阶段策略——先全部下载，再全部处理
+                print(f"📋 批量模式：共 {total} 个任务，使用两阶段策略")
+
+                # ── 第一阶段：批量下载 ─────────────────────────────────────
+                print(f"\n{'=' * 60}")
+                print(f"🌐 第一阶段：批量下载全部视频（共 {total} 个）")
+                print("=" * 60)
+                prepared_list = []
+                for i, src in enumerate(sources, 1):
+                    print(f"\n── 下载 [{i}/{total}]: {src}")
+                    prepared_list.append(auto_subtitle._prepare_source(src))
+
+                dl_ok   = sum(1 for p in prepared_list if p.get("status") != "失败")
+                dl_fail = total - dl_ok
+                print(f"\n✅ 下载阶段完成：{dl_ok} 成功 / {dl_fail} 失败 / {total} 总计")
+
+                # ── 第二阶段：批量处理 ─────────────────────────────────────
+                print(f"\n{'=' * 60}")
+                print("⚙️  第二阶段：批量处理（识别 → 翻译 → 压制字幕）")
+                print("=" * 60)
+                for i, prepared in enumerate(prepared_list, 1):
+                    print(f"\n{'#' * 60}")
+                    print(f"## 任务 [{i}/{total}]: {prepared['source']}")
+                    print("#" * 60)
+                    result = auto_subtitle._process_prepared(
+                        prepared, burn_subtitle=burn_subtitle,
+                        enable_dubbing=enable_dubbing, enable_enhance=enable_enhance
+                    )
+                    all_results.append(result)
+                    if result:
+                        for key in ("en_srt", "zh_srt", "bi_srt", "final_video", "dubbed_video"):
+                            path = result.get(key)
+                            if path and os.path.exists(path):
+                                result_files.append(path)
 
             auto_subtitle._print_summary(all_results)
         finally:
@@ -174,7 +207,7 @@ def build_ui():
                     burn_sub = gr.Checkbox(label="压制硬字幕到视频", value=True)
                     dub_check = gr.Checkbox(
                         label="AI 中文配音（分离背景音 + edge-tts 语音合成）",
-                        value=False,
+                        value=True,
                     )
                     enhance_check = gr.Checkbox(
                         label="AI 画质增强（Real-ESRGAN 超分辨率，耗时较长）",
