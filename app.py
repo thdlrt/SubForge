@@ -115,6 +115,9 @@ def _run_processing(sources, burn_subtitle, enable_dubbing, enable_enhance):
                                 result_files.append(path)
 
             auto_subtitle._print_summary(all_results)
+        except Exception:
+            import traceback
+            print(f"\n\u274c 处理时发生错误：\n{traceback.format_exc()}")
         finally:
             sys.stdout = old_stdout
             sys.stderr = old_stderr

@@ -372,7 +372,9 @@ def step1b_enhance_video(video_path):
 
 
 def step2_transcribe(video_path):
-    """第二步：用 Whisper 识别语音，生成外语字幕"""
+    """第二步：用 Whisper 识别语音，生成外语字幕。
+    在独立子进程中运行，子进程退出时 OS 自动回收 GPU 显存，
+    避免 ctranslate2 C++ 析构在 Windows CUDA 环境下引发 segfault。"""
     print("\n" + "=" * 60)
     print("🎤 第二步：语音识别生成外语字幕（本地 GPU）...")
     print("=" * 60)
@@ -385,155 +387,37 @@ def step2_transcribe(video_path):
         print(f"   ↳ 共读取 {len(subs)} 条字幕")
         return en_srt_path, subs
 
-    from faster_whisper import WhisperModel
+    # 通过 subprocess 在独立进程中运行 Whisper（类似 demucs 的做法）
+    # 子进程退出后 GPU 显存由 OS 自动回收，不触发 ctranslate2 析构 bug
+    wrapper = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_run_whisper.py")
+    args_json = json.dumps({
+        "video_path": os.path.abspath(video_path),
+        "en_srt_path": os.path.abspath(en_srt_path),
+        "whisper_model": WHISPER_MODEL,
+        "device": DEVICE,
+        "compute_type": COMPUTE_TYPE,
+        "video_language": VIDEO_LANGUAGE,
+        "gap_threshold": SUBTITLE_MAX_GAP_MS / 1000.0,
+        "max_chars": SUBTITLE_MAX_CHARS,
+    }, ensure_ascii=False)
 
-    print(f"加载模型 '{WHISPER_MODEL}'（首次运行会自动下载，请耐心等待）...")
-    model = WhisperModel(WHISPER_MODEL, device=DEVICE, compute_type=COMPUTE_TYPE)
-
-    print("开始转录...")
-    lang_arg = VIDEO_LANGUAGE if VIDEO_LANGUAGE else None
-    if lang_arg:
-        print(f"指定识别语言: {lang_arg}")
-    else:
-        print("语言设置为 null，将自动检测...")
-    segments, info = model.transcribe(
-        video_path,
-        language=lang_arg,
-        vad_filter=True,
-        vad_parameters=dict(min_silence_duration_ms=500),
-        word_timestamps=True,
+    proc = subprocess.Popen(
+        [sys.executable, "-u", wrapper, args_json],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, encoding="utf-8", errors="replace",
     )
+    # 实时转发子进程输出（CLI 打到终端，Gradio 走 _TeeStream 到 UI）
+    for line in proc.stdout:
+        print(line, end="", flush=True)
+    ret = proc.wait()
 
-    print(f"检测到语言: {info.language}, 置信度: {info.language_probability:.2f}")
+    if ret != 0:
+        raise RuntimeError(f"Whisper 转录子进程异常退出 (exit code {ret})")
 
-    gap_threshold = SUBTITLE_MAX_GAP_MS / 1000.0  # 转为秒
-    max_chars = SUBTITLE_MAX_CHARS
-    _PUNCT_BREAK = frozenset('.?!,;:…，。？！；：、')
-    # 逐段收集，使 Ctrl+C 可在段间打断（list() 会在 C++ 内部阻塞直到全部完成）
-    raw_segs = []
-    try:
-        for seg in segments:
-            raw_segs.append(seg)
-    except KeyboardInterrupt:
-        del model
-        import gc; gc.collect()
-        try:
-            import torch
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except ImportError:
-            pass
-        raise
-    subs = []
-    idx = 0
+    print("  ↳ GPU 显存已随子进程释放")
 
-    def _flush_chunk(chunk):
-        """将一组词生成一条字幕"""
-        nonlocal idx
-        if not chunk:
-            return
-        idx += 1
-        text = "".join(w.word for w in chunk).strip()
-        text = text.rstrip('.?!,;:…，。？！；：、')
-        subs.append(srt.Subtitle(
-            index=idx,
-            start=timedelta(seconds=chunk[0].start),
-            end=timedelta(seconds=chunk[-1].end),
-            content=text
-        ))
-
-    for seg in raw_segs:
-        words = seg.words if seg.words else []
-        if not words:
-            # 无词级时间戳时直接使用段级信息
-            idx += 1
-            subs.append(srt.Subtitle(
-                index=idx,
-                start=timedelta(seconds=seg.start),
-                end=timedelta(seconds=seg.end),
-                content=seg.text.strip()
-            ))
-        else:
-            # 按词间间隙 + 最大字符数分割字幕
-            # 字符超限时双向搜索最近标点，优先向前回退，其次向后预读
-            LOOK_BACK = 8   # 向前（chunk 内回退）最多搜几个词
-            LOOK_AHEAD = 2  # 向后（预读后续词）最多搜几个词
-            chunk_words = [words[0]]
-            chunk_len = len(words[0].word.strip())
-            wi = 1
-            while wi < len(words):
-                w_prev = words[wi - 1]
-                w_curr = words[wi]
-                word_text = w_curr.word.strip()
-                gap_break = w_curr.start - w_prev.end > gap_threshold
-                len_break = chunk_len + len(word_text) > max_chars
-
-                if gap_break:
-                    _flush_chunk(chunk_words)
-                    chunk_words = []
-                    chunk_len = 0
-                elif len_break:
-                    # ── 向前搜：在已有 chunk 中回退找标点 ──────────────
-                    back_at = -1
-                    search_back_from = len(chunk_words) - 1
-                    search_back_to   = max(0, len(chunk_words) - LOOK_BACK)
-                    for bi in range(search_back_from, search_back_to - 1, -1):
-                        if chunk_words[bi].word.rstrip()[-1:] in _PUNCT_BREAK:
-                            back_at = bi
-                            break
-
-                    if back_at >= 0:
-                        _flush_chunk(chunk_words[:back_at + 1])
-                        chunk_words = chunk_words[back_at + 1:]
-                        chunk_len = sum(len(w.word.strip()) for w in chunk_words)
-                        # w_curr 正常追加到下面
-                    else:
-                        # ── 向后搜：预读后续词找标点 ──────────────────
-                        ahead_at = -1
-                        for ai in range(wi, min(len(words), wi + LOOK_AHEAD)):
-                            if words[ai].word.rstrip()[-1:] in _PUNCT_BREAK:
-                                ahead_at = ai
-                                break
-
-                        if ahead_at >= 0:
-                            # 接受到标点词（含），再断句
-                            for j in range(wi, ahead_at + 1):
-                                chunk_words.append(words[j])
-                                chunk_len += len(words[j].word.strip())
-                            _flush_chunk(chunk_words)
-                            chunk_words = []
-                            chunk_len = 0
-                            wi = ahead_at + 1
-                            continue  # wi 已更新，跳过末尾追加
-                        else:
-                            # 两侧都没找到标点 → 直接在当前位置截断（无需标点结尾）
-                            _flush_chunk(chunk_words)
-                            chunk_words = []
-                            chunk_len = 0
-
-                chunk_words.append(w_curr)
-                chunk_len += len(word_text)
-                wi += 1
-            _flush_chunk(chunk_words)
-        if idx % 20 == 0 and idx > 0:
-            print(f"  已处理 {idx} 条字幕...")
-
-    # 显式释放 Whisper 模型，避免 GPU 显存残留导致后续步骤被 OS 静默终止
-    del model, raw_segs
-    import gc
-    gc.collect()
-    try:
-        import torch
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            print("  ↳ GPU 显存已释放")
-    except ImportError:
-        pass
-
-    with open(en_srt_path, "w", encoding="utf-8") as f:
-        f.write(srt.compose(subs))
-
-    print(f"✅ 外语字幕已生成: {en_srt_path} (共 {len(subs)} 条)")
+    with open(en_srt_path, encoding="utf-8") as f:
+        subs = list(srt.parse(f.read()))
     return en_srt_path, subs
 
 
