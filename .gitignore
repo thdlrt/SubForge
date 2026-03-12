@@ -1,5 +1,6 @@
 # 忽略本地配置（含 API Key，禁止上传）
 config.json
+cookies.txt
 
 # 忽略视频输入/输出目录（文件太大）
 input/

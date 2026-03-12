@@ -4,6 +4,7 @@
     "compute_type": "auto",
     "video_language": null,
     "max_video_height": 1080,
+    "ytdlp_cookies": "",
     "subtitle_max_gap_ms": 1500,
     "qwen_api_key": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
     "qwen_base_url": "https://your-api-endpoint/v1",

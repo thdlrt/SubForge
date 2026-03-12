@@ -174,6 +174,7 @@ output/
 | 参数 | 默认值 | 可选值 | 说明 |
 |------|--------|--------|------|
 | `max_video_height` | `1080` | `720` / `1080` / `1440` / `2160` | YouTube 下载的最大分辨率 |
+| `ytdlp_cookies` | `""` | 文件路径字符串 | Netscape 格式的 cookies 文件路径（解决 YouTube 要求登录验证的问题），留空则不使用 |
 
 ### 翻译 API
 
@@ -219,6 +220,38 @@ output/
 > 模型权重文件（约 64MB）在首次运行时自动从 GitHub Releases 下载，保存在 `realesrgan` 包目录的 `weights/` 下。
 
 ## 常见问题
+
+### YouTube 提示「Sign in to confirm you're not a bot」
+
+YouTube 对部分 IP 或视频要求登录认证，yt-dlp 会报错 `Sign in to confirm you're not a bot`。
+
+**解决方法：导出浏览器 cookies 供 yt-dlp 使用。**
+
+#### 方法一：浏览器扩展导出（推荐，适合普通用户）
+
+1. 在 Chrome / Edge 中安装扩展 [**Get cookies.txt LOCALLY**](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)
+2. 打开 [youtube.com](https://www.youtube.com) 并**确保已登录账号**
+3. 点击扩展图标 → 选择「Export As」→「cookies.txt」
+4. 将导出的文件保存到项目目录，例如 `cookies.txt`
+5. 在 `config.json` 中填写路径：
+   ```json
+   "ytdlp_cookies": "./cookies.txt"
+   ```
+
+#### 方法二：yt-dlp 直接从浏览器读取（无需手动导出）
+
+yt-dlp 支持直接读取已安装浏览器的 cookies，**但此方式不支持通过 config.json 配置**，需要临时在命令行使用：
+
+```bash
+yt-dlp --cookies-from-browser chrome "https://www.youtube.com/watch?v=XXXXX"
+# 或 edge / firefox / opera 等
+```
+
+#### 注意事项
+
+- cookies 文件包含账号登录信息，**请勿分享或提交到 Git**（`config.json` 已在 `.gitignore` 中，cookies 路径只存在于本机 `config.json` 里）
+- cookies 有有效期，若下载再次报认证错误，重新导出一次即可
+- 建议创建一个专用的小号用于导出 cookies，避免主账号暴露
 
 ### demucs 分离音频时报 torchcodec / torchaudio 错误
 

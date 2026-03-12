@@ -41,6 +41,7 @@ def _load_config():
         "compute_type": "auto",
         "video_language": None,
         "max_video_height": 1080,
+        "ytdlp_cookies": "",
         "subtitle_max_gap_ms": 1500,
         "qwen_api_key": "",
         "qwen_base_url": "",
@@ -82,6 +83,7 @@ DEVICE                 = _cfg["device"]
 COMPUTE_TYPE           = _cfg["compute_type"]
 VIDEO_LANGUAGE         = _cfg["video_language"]
 MAX_VIDEO_HEIGHT       = _cfg["max_video_height"]
+YTDLP_COOKIES          = _cfg["ytdlp_cookies"]
 SUBTITLE_MAX_GAP_MS    = _cfg["subtitle_max_gap_ms"]
 QWEN_API_KEY           = _cfg["qwen_api_key"]
 QWEN_BASE_URL          = _cfg["qwen_base_url"]
@@ -140,8 +142,13 @@ def step1_download_video(url, output_dir):
         "--merge-output-format", "mp4",
         "-o", output_template,
         "--no-playlist",
-        url
     ]
+    if YTDLP_COOKIES and os.path.isfile(YTDLP_COOKIES):
+        cmd += ["--cookies", YTDLP_COOKIES]
+        print(f"   使用 cookies 文件: {YTDLP_COOKIES}")
+    elif YTDLP_COOKIES:
+        print(f"   ⚠ cookies 文件不存在: {YTDLP_COOKIES}，将不使用 cookies")
+    cmd.append(url)
 
     subprocess.run(cmd, check=True)
 
