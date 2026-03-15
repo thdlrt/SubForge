@@ -218,7 +218,7 @@ def build_ui():
                         value=True,
                     )
                     enhance_check = gr.Checkbox(
-                        label="AI 画质增强（Real-ESRGAN 超分辨率，耗时较长）",
+                        label="AI 画质增强（仅 NVIDIA GPU，Real-ESRGAN 超分辨率）",
                         value=False,
                     )
                     summary_check = gr.Checkbox(

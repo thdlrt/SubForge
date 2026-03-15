@@ -62,10 +62,16 @@ def step1b_enhance_video(video_path):
         raise ValueError(f"不支持的增强模型：{model_name}。可选：{list(MODEL_CONFIGS.keys())}")
 
     cfg    = MODEL_CONFIGS[model_name]
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    half   = device.type == "cuda"
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "AI 画质增强仅支持 NVIDIA GPU (CUDA)。\n"
+            "当前环境未检测到可用 CUDA，建议关闭“AI 画质增强”选项后继续其余流程。"
+        )
 
-    tile_size = 1024 if device.type == "cuda" else 512
+    device = torch.device("cuda")
+    half   = True
+
+    tile_size = 1024
 
     model = RRDBNet(
         num_in_ch=3, num_out_ch=3, num_feat=64,

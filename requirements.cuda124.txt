@@ -1,0 +1,9 @@
+# Torch stack for CUDA 12.4
+# Install with:
+# pip install -r requirements.txt -r requirements.cuda124.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+# If download from mirror is slow, keep this index for torch wheels:
+--index-url https://download.pytorch.org/whl/cu124
+
+torch>=2.4.0
+torchvision>=0.19.0
+torchaudio>=2.4.0

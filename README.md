@@ -29,63 +29,52 @@ YouTube / 本地视频 → 语音识别 → AI 概括总结（可选）→ AI �
 
 ## 环境配置
 
-### 1. Python 依赖
+先说结论：
+
+- 没有 NVIDIA GPU，仍可用：下载、识别、翻译、字幕压制、AI 总结、AI 配音。
+- 只有 AI 画质增强（Real-ESRGAN）要求 NVIDIA GPU + CUDA。
+
+### 1. 一键创建环境（推荐）
 
 ```bash
-# 推荐 Python 3.10+，conda 环境
-conda create -n subforge python=3.10
+conda env create -f environment.yml
 conda activate subforge
-
-# 核心依赖
-pip install faster-whisper openai srt yt-dlp gradio
-
-# 配音功能依赖
-pip install demucs edge-tts pydub soundfile
-
-# 画质增强依赖
-pip install realesrgan basicsr opencv-python
 ```
 
-> **Windows CUDA 版 torch**：如果 `torch` 是 CPU 版（`torch.__version__` 末尾含 `+cpu`），画质增强只能用 CPU，速度极慢。RTX 显卡请重装 CUDA 版：
-> ```bash
-> pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124 --force-reinstall --no-deps
-> ```
+### 2. 安装 Torch（按硬件二选一）
 
-> **basicsr 兼容性修复**：`basicsr 1.4.2` 引用了 torchvision 旧 API，需手动 patch 一行（安装后执行一次）：
-> 找到 `site-packages/basicsr/data/degradations.py`，将
-> `from torchvision.transforms.functional_tensor import rgb_to_grayscale`
-> 改为
-> `from torchvision.transforms.functional import rgb_to_grayscale`
+```bash
+# NVIDIA GPU（CUDA 12.4，推荐）
+pip install -r requirements.cuda124.txt
 
-> **关于 soundfile**：`torchaudio 2.10+` 默认使用 `torchcodec` 保存音频，但该库在 Windows 上存在 FFmpeg DLL 兼容问题。本项目通过 `_run_demucs.py` 包装脚本用 `soundfile` 替代 `torchcodec` 进行音频保存，因此 **必须安装 soundfile**（`pip install soundfile`），否则 demucs 音频分离步骤会失败。
+# 无 NVIDIA GPU（CPU，仅不支持 AI 超分）
+pip install -r requirements.cpu.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
 
-### 2. 系统工具
+### 3. 系统工具
 
 | 工具 | 用途 | 安装方式 |
 |------|------|----------|
 | [ffmpeg](https://ffmpeg.org/) | 视频压制 / 音频处理 / 探测 | `winget install ffmpeg` 或官网下载，需加入 PATH |
-| [yt-dlp](https://github.com/yt-dlp/yt-dlp) | YouTube 下载 | `pip install yt-dlp`（已包含在上方依赖中） |
+| [yt-dlp](https://github.com/yt-dlp/yt-dlp) | YouTube 下载 | 已包含在 `requirements.txt` |
 
-### 3. GPU 加速（推荐）
-
-faster-whisper 默认使用 GPU（CUDA），需要：
-- NVIDIA 显卡 + 安装 [CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit)
-- 如无 GPU，脚本会自动回退到 CPU（速度较慢，建议将 `whisper_model` 调小为 `base` 或 `tiny`）
-
-demucs 同样支持 GPU 加速，有 CUDA 时会自动使用。
-
-### 4. API Key
-
-本工具使用与 OpenAI SDK 兼容的 API 接口，支持任何兼容格式的大模型服务（如阿里云百炼、DeepSeek、硅基流动等）。
-
-**首次配置：**
+### 4. 安装后自检
 
 ```bash
-# 从模板复制一份本地配置（config.json 已在 .gitignore 中，不会上传到 GitHub）
-cp config.example.json config.json
+python -c "import torch; print('torch:', torch.__version__, 'cuda:', torch.cuda.is_available())"
+python -c "import gradio, faster_whisper, srt, openai; print('python deps ok')"
+ffmpeg -version
 ```
 
-然后编辑 `config.json`，填写对应服务的 API Key 和接口地址：
+若输出 `cuda: True`，说明可用 AI 超分；若为 `False`，请在 UI 中关闭“AI 画质增强”。
+
+### 5. API Key 配置
+
+```powershell
+Copy-Item .\config.example.json .\config.json
+```
+
+然后编辑 `config.json`，至少填写：
 
 ```json
 {
@@ -95,7 +84,28 @@ cp config.example.json config.json
 }
 ```
 
-> **注意**：`config.json` 含有你的真实 API Key，已被 `.gitignore` 排除，永远不会被 git 追踪或上传。仓库中只保留 `config.example.json` 作为配置模板。
+### 6. 补充说明
+
+faster-whisper 默认优先使用 GPU（CUDA），无 GPU 会自动回退 CPU：
+- NVIDIA 显卡 + 安装 [CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit)
+- 如无 GPU，脚本会自动回退到 CPU（速度较慢，建议将 `whisper_model` 调小为 `base` 或 `tiny`）
+
+demucs 同样支持 GPU 加速，有 CUDA 时会自动使用。
+
+AI 画质增强（Real-ESRGAN）仅支持 NVIDIA GPU（CUDA）；无 CUDA 时会直接提示不可用，不再走 CPU 慢速增强。
+
+本工具使用 OpenAI SDK 兼容接口，可接入阿里云百炼、DeepSeek、硅基流动等服务。
+
+> `config.json` 含真实密钥，已被 `.gitignore` 排除，不会被 git 跟踪。
+
+### 7. 依赖文件说明
+
+- `requirements.txt`：项目主依赖（不含 torch 三件套）
+- `requirements.cuda124.txt`：CUDA 12.4 环境的 torch 依赖（推荐）
+- `requirements.cpu.txt`：CPU 环境的 torch 依赖（无 GPU 时使用，不支持 AI 超分）
+- `environment.yml`：conda 一键建环境配置
+
+> 若你所在网络访问外网较慢，优先使用上文的清华镜像参数安装基础依赖。
 
 ## 使用方法
 
@@ -177,7 +187,9 @@ output/
 
 | 参数 | 默认值 | 可选值 | 说明 |
 |------|--------|--------|------|
-| `max_video_height` | `1080` | `720` / `1080` / `1440` / `2160` | YouTube 下载的最大分辨率 || `ytdlp_client` | `""` | `ios` / `tv_embedded` / `web` / `""` | 模拟的 YouTube 客户端类型。`ios` 和 `tv_embedded` 有时可绕过 bot 检测；留空则使用默认 web 客户端 || `ytdlp_cookies` | `\"\"` | 文件路径或浏览器名 | cookies 配置，支持两种模式（见下方说明）：填文件路径如 `\"./cookies.txt\"` 使用导出的 cookies 文件；填浏览器名如 `\"edge\"` 直接从浏览器读取。留空则不使用 |
+| `max_video_height` | `1080` | `720` / `1080` / `1440` / `2160` | YouTube 下载的最大分辨率 |
+| `ytdlp_client` | `""` | `ios` / `tv_embedded` / `web` / `""` | 模拟的 YouTube 客户端类型。`ios` 和 `tv_embedded` 有时可绕过 bot 检测；留空则使用默认 web 客户端 |
+| `ytdlp_cookies` | `""` | 文件路径或浏览器名 | cookies 配置，支持两种模式（见下方说明）：填文件路径如 `"./cookies.txt"` 使用导出的 cookies 文件；填浏览器名如 `"edge"` 直接从浏览器读取。留空则不使用 |
 
 ### 翻译 API
 
@@ -286,9 +298,13 @@ YouTube 对部分 IP 或视频启用 bot 检测，yt-dlp 会报错 `Sign in to c
 
 ### 画质增强速度慢
 
-- 确认是否用上了 GPU：日志应显示 `设备: cuda`；若显示 `cpu` 请参考上方安装 CUDA 版 torch
-- 对于 1080p 视频，RTX 3090 约 **3~5 帧/秒**（≈ 视频时长的 6~10 倍处理时间），属正常范围
+- 画质增强仅支持 NVIDIA GPU；请先确认 `python -c "import torch; print(torch.cuda.is_available())"` 输出为 `True`
 - 如显存不足报 OOM，可在 `auto_subtitle.py` 中将 `tile_size = 1024` 改小（如 `512`）
+
+### 未检测到 CUDA，AI 超分不可用
+
+- 这是预期行为：当前版本将 AI 超分限定为 NVIDIA GPU 才可用。
+- 没有 GPU 时，请在 Web UI 取消勾选“AI 画质增强”，其他功能不受影响。
 
 ### 画质增强报 lzma DLL 错误（Windows）
 
@@ -307,6 +323,10 @@ SubForge/
 ├── _run_demucs.py         # demucs 包装脚本（绕过 torchcodec）
 ├── config.json            # 本地配置（不上传，含 API Key）
 ├── config.example.json    # 配置模板
+├── requirements.txt       # 主依赖
+├── requirements.cpu.txt   # CPU 版 torch 依赖
+├── requirements.cuda124.txt # CUDA 12.4 版 torch 依赖
+├── environment.yml        # conda 一键建环境
 ├── .gitignore
 ├── README.md
 ├── input/                 # 本地视频输入目录
