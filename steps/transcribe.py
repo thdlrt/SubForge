@@ -52,6 +52,18 @@ def step2_transcribe(video_path):
     ret = proc.wait()
 
     if ret != 0:
+        # Windows + CUDA 下可能在进程退出阶段异常，但字幕文件已成功写出。
+        # 若输出可读且非空，则视为成功并继续后续流程。
+        if os.path.exists(en_srt_path):
+            try:
+                with open(en_srt_path, encoding="utf-8") as f:
+                    subs = list(srt.parse(f.read()))
+                if subs:
+                    print(f"⚠️ Whisper 子进程异常退出 (exit code {ret})，但字幕已生成且可读取，继续后续步骤。")
+                    print("  ↳ GPU 显存已随子进程释放")
+                    return en_srt_path, subs
+            except Exception:
+                pass
         raise RuntimeError(f"Whisper 转录子进程异常退出 (exit code {ret})")
 
     print("  ↳ GPU 显存已随子进程释放")

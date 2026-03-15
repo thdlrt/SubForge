@@ -52,7 +52,7 @@ _processing_lock = threading.Lock()
 
 # ======================== 处理逻辑 ========================
 
-def _run_processing(sources, burn_subtitle, enable_dubbing, enable_enhance):
+def _run_processing(sources, burn_subtitle, enable_dubbing, enable_enhance, enable_summary):
     """Generator: 在后台线程处理视频，实时流式输出日志"""
     log_q = queue.Queue()
     done = threading.Event()
@@ -70,11 +70,13 @@ def _run_processing(sources, burn_subtitle, enable_dubbing, enable_enhance):
                 # 单任务：直接走原流程，无需两阶段
                 result = auto_subtitle.process_one(
                     sources[0], burn_subtitle=burn_subtitle,
-                    enable_dubbing=enable_dubbing, enable_enhance=enable_enhance
+                    enable_dubbing=enable_dubbing,
+                    enable_enhance=enable_enhance,
+                    enable_summary=enable_summary,
                 )
                 all_results.append(result)
                 if result:
-                    for key in ("en_srt", "zh_srt", "bi_srt", "final_video", "dubbed_video"):
+                    for key in ("en_srt", "zh_srt", "bi_srt", "summary_md", "final_video", "dubbed_video"):
                         path = result.get(key)
                         if path and os.path.exists(path):
                             result_files.append(path)
@@ -97,7 +99,7 @@ def _run_processing(sources, burn_subtitle, enable_dubbing, enable_enhance):
 
                 # ── 第二阶段：批量处理 ─────────────────────────────────────
                 print(f"\n{'=' * 60}")
-                print("⚙️  第二阶段：批量处理（识别 → 翻译 → 压制字幕）")
+                print("⚙️  第二阶段：批量处理（识别 → 总结(可选) → 翻译 → 压制字幕）")
                 print("=" * 60)
                 for i, prepared in enumerate(prepared_list, 1):
                     print(f"\n{'#' * 60}")
@@ -105,11 +107,13 @@ def _run_processing(sources, burn_subtitle, enable_dubbing, enable_enhance):
                     print("#" * 60)
                     result = auto_subtitle._process_prepared(
                         prepared, burn_subtitle=burn_subtitle,
-                        enable_dubbing=enable_dubbing, enable_enhance=enable_enhance
+                        enable_dubbing=enable_dubbing,
+                        enable_enhance=enable_enhance,
+                        enable_summary=enable_summary,
                     )
                     all_results.append(result)
                     if result:
-                        for key in ("en_srt", "zh_srt", "bi_srt", "final_video", "dubbed_video"):
+                        for key in ("en_srt", "zh_srt", "bi_srt", "summary_md", "final_video", "dubbed_video"):
                             path = result.get(key)
                             if path and os.path.exists(path):
                                 result_files.append(path)
@@ -149,7 +153,8 @@ def _run_processing(sources, burn_subtitle, enable_dubbing, enable_enhance):
         _processing_lock.release()
 
 
-def process_handler(urls_text, uploaded_files, burn_subtitle, enable_dubbing, enable_enhance):
+def process_handler(urls_text, uploaded_files, burn_subtitle, enable_dubbing,
+                    enable_enhance, enable_summary):
     """Gradio 入口：解析输入，启动处理"""
     sources = []
 
@@ -170,7 +175,7 @@ def process_handler(urls_text, uploaded_files, burn_subtitle, enable_dubbing, en
         yield "⚠ 请输入至少一个 YouTube 链接或上传本地视频文件。", []
         return
 
-    yield from _run_processing(sources, burn_subtitle, enable_dubbing, enable_enhance)
+    yield from _run_processing(sources, burn_subtitle, enable_dubbing, enable_enhance, enable_summary)
 
 
 # ======================== 构建 UI ========================
@@ -180,7 +185,7 @@ def build_ui():
     api_warning = ""
     if not auto_subtitle.QWEN_API_KEY:
         api_warning = (
-            "\n> ⚠️ **API Key 未配置**：请先复制 `config.example.json` → `config.json` 并填写 API Key，否则翻译步骤会失败。"
+            "\n> ⚠️ **API Key 未配置**：请先复制 `config.example.json` → `config.json` 并填写 API Key，否则 AI 总结/翻译步骤会失败。"
         )
 
     with gr.Blocks(
@@ -188,7 +193,7 @@ def build_ui():
     ) as app:
         gr.Markdown(
             "# 🎬 SubForge — AI 字幕一键生成工具\n"
-            "YouTube / 本地视频 → 语音识别 → AI 翻译 → 双语字幕压制"
+            "YouTube / 本地视频 → 语音识别 → AI 总结(可选) → AI 翻译 → 双语字幕压制"
             + api_warning
         )
 
@@ -214,6 +219,10 @@ def build_ui():
                     )
                     enhance_check = gr.Checkbox(
                         label="AI 画质增强（Real-ESRGAN 超分辨率，耗时较长）",
+                        value=False,
+                    )
+                    summary_check = gr.Checkbox(
+                        label="AI 内容概括总结（基于英文 SRT 生成中文 Markdown）",
                         value=False,
                     )
                     gr.Markdown(
@@ -246,7 +255,7 @@ def build_ui():
         # 绑定事件
         process_btn.click(
             fn=process_handler,
-            inputs=[urls_input, file_input, burn_sub, dub_check, enhance_check],
+            inputs=[urls_input, file_input, burn_sub, dub_check, enhance_check, summary_check],
             outputs=[log_output, file_output],
         )
 

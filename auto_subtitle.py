@@ -21,6 +21,7 @@ from config import *  # noqa: F401,F403
 from steps.download   import step1_download_video, prepare_source as _prepare_source
 from steps.enhance    import step1b_enhance_video
 from steps.transcribe import step2_transcribe
+from steps.summarize  import step2_5_summarize_from_srt
 from steps.translate  import step3_translate
 from steps.burn       import step4_burn_subtitles
 from steps.dubbing    import step5_separate_audio, step6_tts_generate, step7_merge_audio
@@ -29,8 +30,9 @@ from steps.dubbing    import step5_separate_audio, step6_tts_generate, step7_mer
 # ======================== 流程编排 ========================
 
 
-def _process_prepared(prepared, burn_subtitle=True, enable_dubbing=False, enable_enhance=False):
-    """第二阶段：处理已下载的视频（识别 → 翻译 → 压制字幕 → 配音）。
+def _process_prepared(prepared, burn_subtitle=True, enable_dubbing=False,
+                      enable_enhance=False, enable_summary=False):
+    """第二阶段：处理已下载的视频（识别 → 总结(可选) → 翻译 → 压制字幕 → 配音）。
     接受 _prepare_source() 返回的字典；若准备阶段已失败则直接透传错误结果。"""
     source = prepared["source"]
 
@@ -39,6 +41,7 @@ def _process_prepared(prepared, burn_subtitle=True, enable_dubbing=False, enable
             "source": source,
             "video": None,
             "en_srt": None, "zh_srt": None, "bi_srt": None,
+            "summary_md": None,
             "final_video": None, "dubbed_video": None,
             "status": "失败",
             "last_step": prepared.get("last_step", "1-下载"),
@@ -54,6 +57,7 @@ def _process_prepared(prepared, burn_subtitle=True, enable_dubbing=False, enable
 
     current_step = "初始化"
     en_srt_path = zh_srt_path = bi_srt_path = None
+    summary_md_path = None
     final_video = dubbed_video = None
 
     try:
@@ -63,6 +67,10 @@ def _process_prepared(prepared, burn_subtitle=True, enable_dubbing=False, enable
 
         current_step = "2-语音识别"
         en_srt_path, subs = step2_transcribe(video_path)
+
+        if enable_summary:
+            current_step = "2.5-AI内容总结"
+            summary_md_path = step2_5_summarize_from_srt(en_srt_path, video_path)
 
         current_step = "3-翻译字幕"
         zh_srt_path, bi_srt_path = step3_translate(subs, video_path)
@@ -89,6 +97,7 @@ def _process_prepared(prepared, burn_subtitle=True, enable_dubbing=False, enable
             "en_srt": en_srt_path,
             "zh_srt": zh_srt_path,
             "bi_srt": bi_srt_path,
+            "summary_md": summary_md_path,
             "final_video": final_video,
             "dubbed_video": dubbed_video,
             "status": "失败",
@@ -106,6 +115,8 @@ def _process_prepared(prepared, burn_subtitle=True, enable_dubbing=False, enable
         print(f"  中文字幕:   {zh_srt_path}")
     if bi_srt_path:
         print(f"  双语字幕:   {bi_srt_path}")
+    if summary_md_path:
+        print(f"  AI总结:     {summary_md_path}")
     if final_video:
         print(f"  最终视频:   {final_video}")
     if dubbed_video:
@@ -117,6 +128,7 @@ def _process_prepared(prepared, burn_subtitle=True, enable_dubbing=False, enable
         "en_srt": en_srt_path,
         "zh_srt": zh_srt_path,
         "bi_srt": bi_srt_path,
+        "summary_md": summary_md_path,
         "final_video": final_video,
         "dubbed_video": dubbed_video,
         "status": "成功",
@@ -124,12 +136,14 @@ def _process_prepared(prepared, burn_subtitle=True, enable_dubbing=False, enable
     }
 
 
-def process_one(source, burn_subtitle=True, enable_dubbing=False, enable_enhance=False):
+def process_one(source, burn_subtitle=True, enable_dubbing=False,
+                enable_enhance=False, enable_summary=False):
     """处理单个视频源（本地文件或 YouTube 链接）。
     组合 _prepare_source + _process_prepared，保持向后兼容。"""
     prepared = _prepare_source(source)
     return _process_prepared(prepared, burn_subtitle=burn_subtitle,
-                             enable_dubbing=enable_dubbing, enable_enhance=enable_enhance)
+                             enable_dubbing=enable_dubbing, enable_enhance=enable_enhance,
+                             enable_summary=enable_summary)
 
 
 def main():
@@ -173,7 +187,7 @@ def main():
             print(f"\n✅ 下载阶段完成：{dl_ok} 成功 / {dl_fail} 失败 / {total} 总计")
 
             print("\n" + "=" * 60)
-            print("⚙️  第二阶段：批量处理（识别 → 翻译 → 压制字幕）")
+            print("⚙️  第二阶段：批量处理（识别 → 总结(可选) → 翻译 → 压制字幕）")
             print("=" * 60)
             for i, prepared in enumerate(prepared_list, 1):
                 print("\n" + "#" * 60)
