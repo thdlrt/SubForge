@@ -179,9 +179,32 @@ output/
 | `whisper_model` | `"medium"` | `tiny` / `base` / `small` / `medium` / `large-v3` | 模型越大越准但越慢，`tiny` 极快低精度，`large-v3` 最准 |
 | `device` | `"auto"` | `auto` / `cuda` / `cpu` | 推理设备，`auto` 自动检测 GPU |
 | `compute_type` | `"auto"` | `auto` / `float16` / `int8` / `float32` | 推理精度，GPU 推荐 `float16`，CPU 推荐 `int8` |
-| `video_language` | `"en"` | `en` / `zh` / `ja` / `ko` / `fr` / `de` / `es` / `ru` / `auto` | 视频语言，`auto` 自动检测（速度稍慢） |
-| `subtitle_max_gap_ms` | `1500` | 500~5000 | 词级时间戳间隙阈值（毫秒），超过此值自动断开为新字幕，用于解决音乐/长静音导致的跨段粘连 |
-| `subtitle_max_chars` | `80` | 30~200 | 单条字幕最大字符数。连续说话无停顿时，累计字符超过此值自动断行，避免出现超长字幕 |
+| `video_language` | `null` | `null` / `en` / `zh` / `ja` / `ko` / `fr` / `de` / `es` / `ru` | 视频语言；`null` 表示自动检测，手动指定语言会更快更稳 |
+| `subtitle_max_gap_ms` | `2000` | 500~5000 | 词级停顿阈值（毫秒）。大于该值时优先直接断句，是最重要的“按停顿切句”参数 |
+| `subtitle_max_chars` | `120` | 40~220 | 基础字幕长度上限。新算法不会一到这个值就硬切，而是把它作为目标长度和后续硬上限的基准 |
+> 日常通常只需要先调 `subtitle_max_gap_ms` 和 `subtitle_max_chars`。候选窗口大小已经下沉为算法内部默认值，其余可调项收进了 `subtitle_advanced`，默认一般不用改。
+
+#### 高级断句参数：`subtitle_advanced`
+
+| 参数 | 默认值 | 可选值 | 说明 |
+|------|--------|--------|------|
+| `subtitle_advanced.target_chars_ratio` | `0.82` | 0.6~1.0 | 候选断点的目标长度比例，实际目标长度 = `subtitle_max_chars * ratio` |
+| `subtitle_advanced.min_chars_ratio` | `0.38` | 0.2~0.6 | 过短字幕惩罚阈值，低于该比例会明显降权，减少碎片句 |
+| `subtitle_advanced.hard_max_chars_ratio` | `1.35` | 1.1~1.8 | 超长硬上限比例，超过后必须在窗口内选断点 |
+| `subtitle_advanced.hard_max_chars_bias` | `18` | 0~40 | 小字幕上限补偿值，避免 `subtitle_max_chars` 较小时过早硬切 |
+| `subtitle_advanced.soft_max_duration_sec` | `4.8` | 2.5~6.0 | 软时长阈值，到达后开始积极寻找断点 |
+| `subtitle_advanced.hard_max_duration_sec` | `6.4` | 4.0~8.0 | 硬时长阈值，超过后必须落断点 |
+| `subtitle_advanced.min_words` | `3` | 1~8 | 最小词数要求，避免把一个完整句过早切成一两个词的碎片 |
+| `subtitle_advanced.merge_max_gap_sec` | `0.35` | 0.1~0.8 | 短尾句合并时允许的最大间隔 |
+| `subtitle_advanced.merge_max_duration_sec` | `6.0` | 3.0~8.0 | 合并后整条字幕允许的最大时长 |
+| `subtitle_advanced.merge_max_chars_ratio` | `1.35` | 1.0~1.8 | 合并后字幕最大长度比例 |
+| `subtitle_advanced.merge_max_chars_bias` | `24` | 0~40 | 合并后字幕长度补偿值 |
+| `subtitle_advanced.short_tail_max_words` | `3` | 1~6 | 认定为“短尾句”的最大词数 |
+| `subtitle_advanced.short_tail_max_chars` | `18` | 6~30 | 认定为“短尾句”的最大字符数 |
+| `subtitle_advanced.short_tail_max_duration_sec` | `1.4` | 0.5~2.5 | 认定为“短尾句”的最大时长 |
+| `subtitle_advanced.split_max_duration_sec` | `6.8` | 4.0~9.0 | 后处理拆分超长字幕时使用的最大时长阈值 |
+
+> 新版断句器仍然保留内部清理步骤，例如短尾句合并和超长句拆分，但这些属于算法内部流程，不再单独打印后处理日志。
 
 ### 下载
 

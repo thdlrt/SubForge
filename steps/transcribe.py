@@ -11,6 +11,14 @@ import srt
 from config import (
     WHISPER_MODEL, DEVICE, COMPUTE_TYPE, VIDEO_LANGUAGE,
     SUBTITLE_MAX_GAP_MS, SUBTITLE_MAX_CHARS,
+    SUBTITLE_TARGET_CHARS_RATIO, SUBTITLE_MIN_CHARS_RATIO,
+    SUBTITLE_HARD_MAX_CHARS_RATIO, SUBTITLE_HARD_MAX_CHARS_BIAS,
+    SUBTITLE_SOFT_MAX_DURATION_SEC, SUBTITLE_HARD_MAX_DURATION_SEC,
+    SUBTITLE_MIN_WORDS, SUBTITLE_MERGE_MAX_GAP_SEC,
+    SUBTITLE_MERGE_MAX_DURATION_SEC, SUBTITLE_MERGE_MAX_CHARS_RATIO,
+    SUBTITLE_MERGE_MAX_CHARS_BIAS, SUBTITLE_SHORT_TAIL_MAX_WORDS,
+    SUBTITLE_SHORT_TAIL_MAX_CHARS, SUBTITLE_SHORT_TAIL_MAX_DURATION_SEC,
+    SUBTITLE_SPLIT_MAX_DURATION_SEC,
 )
 
 
@@ -40,6 +48,21 @@ def step2_transcribe(video_path):
         "video_language": VIDEO_LANGUAGE,
         "gap_threshold": SUBTITLE_MAX_GAP_MS / 1000.0,
         "max_chars": SUBTITLE_MAX_CHARS,
+        "target_chars_ratio": SUBTITLE_TARGET_CHARS_RATIO,
+        "min_chars_ratio": SUBTITLE_MIN_CHARS_RATIO,
+        "hard_max_chars_ratio": SUBTITLE_HARD_MAX_CHARS_RATIO,
+        "hard_max_chars_bias": SUBTITLE_HARD_MAX_CHARS_BIAS,
+        "soft_max_duration_sec": SUBTITLE_SOFT_MAX_DURATION_SEC,
+        "hard_max_duration_sec": SUBTITLE_HARD_MAX_DURATION_SEC,
+        "min_words": SUBTITLE_MIN_WORDS,
+        "merge_max_gap_sec": SUBTITLE_MERGE_MAX_GAP_SEC,
+        "merge_max_duration_sec": SUBTITLE_MERGE_MAX_DURATION_SEC,
+        "merge_max_chars_ratio": SUBTITLE_MERGE_MAX_CHARS_RATIO,
+        "merge_max_chars_bias": SUBTITLE_MERGE_MAX_CHARS_BIAS,
+        "short_tail_max_words": SUBTITLE_SHORT_TAIL_MAX_WORDS,
+        "short_tail_max_chars": SUBTITLE_SHORT_TAIL_MAX_CHARS,
+        "short_tail_max_duration_sec": SUBTITLE_SHORT_TAIL_MAX_DURATION_SEC,
+        "split_max_duration_sec": SUBTITLE_SPLIT_MAX_DURATION_SEC,
     }, ensure_ascii=False)
 
     proc = subprocess.Popen(
