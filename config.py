@@ -38,6 +38,8 @@ def _load_config():
         "tts_volume": "+0%",
         "tts_bg_volume": 0.5,
         "tts_max_speed": 1.5,
+        "tts_concurrency": 12,
+        "ffmpeg_video_encoder": "auto",
         "enhance_model": "RealESRGAN_x4plus",
         "enhance_outscale": 4,
     }
@@ -132,6 +134,8 @@ TTS_RATE               = _cfg["tts_rate"]
 TTS_VOLUME             = _cfg["tts_volume"]
 TTS_BG_VOLUME          = _cfg["tts_bg_volume"]
 TTS_MAX_SPEED          = _cfg["tts_max_speed"]
+TTS_CONCURRENCY        = _cfg["tts_concurrency"]
+FFMPEG_VIDEO_ENCODER   = _cfg["ffmpeg_video_encoder"]
 ENHANCE_MODEL          = _cfg["enhance_model"]
 ENHANCE_OUTSCALE       = _cfg["enhance_outscale"]
 

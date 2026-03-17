@@ -44,6 +44,8 @@
     "tts_volume": "+0%",
     "tts_bg_volume": 0.5,
     "tts_max_speed": 1.5,
+    "tts_concurrency": 12,
+    "ffmpeg_video_encoder": "auto",
     "enhance_model": "RealESRGAN_x4plus",
     "enhance_outscale": 4
 }

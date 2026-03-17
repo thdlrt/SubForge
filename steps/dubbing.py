@@ -12,17 +12,14 @@ import srt
 
 from config import (
     TTS_VOICE, TTS_RATE, TTS_VOLUME, TTS_BG_VOLUME, TTS_MAX_SPEED,
+    TTS_CONCURRENCY,
 )
 
-
-# ---------------------------------------------------------------------------
-# 步骤 5：分离音频
-# ---------------------------------------------------------------------------
 
 def step5_separate_audio(video_path):
     """用 demucs 将音频分离为人声 + 背景音"""
     print("\n" + "=" * 60)
-    print("🎵 第五步：分离音频（人声 / 背景音）...")
+    print("🎍 第五步：分离音频（人声 / 背景音）...")
     print("=" * 60)
 
     base = video_path.rsplit(".", 1)[0]
@@ -32,22 +29,25 @@ def step5_separate_audio(video_path):
         return bg_path
 
     output_dir = os.path.dirname(video_path)
-
-    # 用 ffmpeg 提取音频为 wav
     audio_path = base + "_audio.wav"
     if not os.path.exists(audio_path):
         cmd_extract = [
-            "ffmpeg", "-i", video_path,
-            "-vn", "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2",
-            "-y", audio_path,
+            "ffmpeg",
+            "-hide_banner", "-loglevel", "error",
+            "-i", video_path,
+            "-vn", "-sn", "-dn",
+            "-acodec", "pcm_s16le",
+            "-ar", "44100",
+            "-ac", "2",
+            "-y",
+            audio_path,
         ]
         print("提取音频轨...")
         subprocess.run(cmd_extract, check=True, capture_output=True)
 
-    # 用包装脚本运行 demucs（绕过 torchaudio 对 torchcodec 的硬依赖）
     print("运行 demucs 音频分离（首次运行会下载模型）...")
-    _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    wrapper = os.path.join(_project_root, "_run_demucs.py")
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    wrapper = os.path.join(project_root, "_run_demucs.py")
     cmd_demucs = [
         sys.executable, wrapper,
         "--two-stems", "vocals",
@@ -57,7 +57,6 @@ def step5_separate_audio(video_path):
     ]
     subprocess.run(cmd_demucs, check=True)
 
-    # demucs 输出：{output_dir}/htdemucs/{stem_name}/no_vocals.wav
     stem_name = Path(audio_path).stem
     demucs_dir = os.path.join(output_dir, "htdemucs", stem_name)
     no_vocals_path = os.path.join(demucs_dir, "no_vocals.wav")
@@ -72,9 +71,91 @@ def step5_separate_audio(video_path):
     return bg_path
 
 
-# ---------------------------------------------------------------------------
-# 步骤 6：TTS 语音合成
-# ---------------------------------------------------------------------------
+def _escape_ffmpeg_filter_path(path):
+    return path.replace("\\", "/").replace("'", "\\'").replace(":", "\\:")
+
+
+def _probe_audio_duration_ms(audio_path):
+    probe_cmd = [
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        audio_path,
+    ]
+    result = subprocess.run(
+        probe_cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="ignore",
+        check=True,
+    )
+    duration_s = float((result.stdout or "").strip() or "0")
+    return max(0, int(round(duration_s * 1000)))
+
+
+def _build_atempo_filter(speed):
+    filters = []
+    remaining = max(float(speed), 0.01)
+    while remaining > 2.0:
+        filters.append("atempo=2.0")
+        remaining /= 2.0
+    while remaining < 0.5:
+        filters.append("atempo=0.5")
+        remaining /= 0.5
+    filters.append(f"atempo={remaining:.5f}")
+    return ",".join(filters)
+
+
+def _render_tts_track_ffmpeg(clip_entries, total_ms, output_path, work_dir):
+    script_path = os.path.join(work_dir, "mix.ffscript")
+    duration_s = max(total_ms, 1) / 1000.0
+    labels = ["[base]"]
+    lines = [f"anullsrc=r=44100:cl=stereo:d={duration_s:.3f}[base]"]
+
+    for idx, clip in enumerate(clip_entries):
+        label = f"[a{idx}]"
+        clip_path = _escape_ffmpeg_filter_path(clip["path"])
+        start_ms = max(0, int(clip["start_ms"]))
+        lines.append(
+            f"amovie='{clip_path}',"
+            "aresample=44100,"
+            "aformat=sample_fmts=fltp:channel_layouts=stereo,"
+            f"adelay={start_ms}|{start_ms}{label}"
+        )
+        labels.append(label)
+
+    lines.append(
+        "".join(labels)
+        + f"amix=inputs={len(labels)}:duration=first:dropout_transition=0:normalize=0[out]"
+    )
+    Path(script_path).write_text(";\n".join(lines) + "\n", encoding="utf-8")
+
+    cmd = [
+        "ffmpeg",
+        "-hide_banner", "-loglevel", "error", "-stats",
+        "-/filter_complex", script_path,
+        "-map", "[out]",
+        "-c:a", "pcm_s16le",
+        "-ar", "44100",
+        "-ac", "2",
+        "-y",
+        output_path,
+    ]
+    subprocess.run(cmd, check=True)
+
+
+def _render_tts_track_pydub(clip_entries, total_ms, output_path):
+    from pydub import AudioSegment
+
+    timeline = AudioSegment.silent(duration=total_ms, frame_rate=44100).set_channels(2)
+    for idx, clip in enumerate(clip_entries, 1):
+        segment = AudioSegment.from_file(clip["path"])
+        timeline = timeline.overlay(segment, position=clip["start_ms"])
+        if idx % 20 == 0:
+            print(f"  已回退拼接 {idx}/{len(clip_entries)} 条...")
+    timeline.export(output_path, format="wav")
+
 
 def step6_tts_generate(zh_srt_path, video_path):
     """用 edge-tts 为中文字幕生成语音"""
@@ -83,7 +164,6 @@ def step6_tts_generate(zh_srt_path, video_path):
     print("=" * 60)
 
     import edge_tts
-    from pydub import AudioSegment
 
     base = video_path.rsplit(".", 1)[0]
     tts_output = base + "_tts.wav"
@@ -91,31 +171,38 @@ def step6_tts_generate(zh_srt_path, video_path):
         print(f"⏭️  TTS 语音已存在，跳过: {tts_output}")
         return tts_output
 
-    # 读取中文字幕
     with open(zh_srt_path, encoding="utf-8") as f:
         zh_subs = list(srt.parse(f.read()))
+    if not zh_subs:
+        raise RuntimeError(f"中文字幕为空，无法生成 TTS: {zh_srt_path}")
 
-    # 获取视频总时长（毫秒）
+    total_ms = 0
     probe_cmd = [
         "ffprobe", "-v", "error",
         "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1",
         video_path,
     ]
-    duration_s = float(subprocess.run(
-        probe_cmd, capture_output=True, text=True,
-    ).stdout.strip() or "0")
-    total_ms = int(duration_s * 1000)
+    try:
+        duration_s = float(subprocess.run(
+            probe_cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            check=True,
+        ).stdout.strip() or "0")
+        total_ms = int(duration_s * 1000)
+    except Exception:
+        total_ms = 0
     if total_ms <= 0:
         total_ms = max(int(sub.end.total_seconds() * 1000) for sub in zh_subs) + 1000
-
-    # 空白静音底板
-    silence = AudioSegment.silent(duration=total_ms, frame_rate=44100)
 
     tts_tmp_dir = base + "_tts_tmp"
     os.makedirs(tts_tmp_dir, exist_ok=True)
 
-    # ---- 异步 TTS 生成 ------------------------------------------------
+    concurrency = max(1, int(TTS_CONCURRENCY))
+    semaphore = asyncio.Semaphore(concurrency)
 
     async def _generate_one(sub, idx, max_retries=3):
         text = sub.content.strip()
@@ -126,99 +213,123 @@ def step6_tts_generate(zh_srt_path, video_path):
             if os.path.getsize(out_file) >= 256:
                 return out_file
             os.remove(out_file)
+
         for attempt in range(1, max_retries + 1):
             try:
-                communicate = edge_tts.Communicate(
-                    text=text, voice=TTS_VOICE, rate=TTS_RATE, volume=TTS_VOLUME,
-                )
-                await communicate.save(out_file)
+                async with semaphore:
+                    communicate = edge_tts.Communicate(
+                        text=text,
+                        voice=TTS_VOICE,
+                        rate=TTS_RATE,
+                        volume=TTS_VOLUME,
+                    )
+                    await communicate.save(out_file)
                 if os.path.exists(out_file) and os.path.getsize(out_file) >= 256:
                     return out_file
                 if os.path.exists(out_file):
                     os.remove(out_file)
-            except Exception as e:
+            except Exception as exc:
                 if os.path.exists(out_file):
                     os.remove(out_file)
                 if attempt < max_retries:
                     await asyncio.sleep(0.5 * attempt)
                 else:
-                    print(f"  ⚠️  TTS 第 {idx} 条生成失败（已重试 {max_retries} 次）: {e}")
+                    print(f"  ⚠️  TTS 第 {idx} 条生成失败（已重试 {max_retries} 次）: {exc}")
         return None
 
     async def _generate_all():
-        return await asyncio.gather(*[_generate_one(sub, i) for i, sub in enumerate(zh_subs)])
-
-    print(f"生成 {len(zh_subs)} 条 TTS 语音（voice={TTS_VOICE}）...")
-    tts_files = asyncio.run(_generate_all())
+        tasks = [_generate_one(sub, i) for i, sub in enumerate(zh_subs)]
+        return await asyncio.gather(*tasks)
 
     async def _retry_one(sub, idx):
         return await _generate_one(sub, idx, max_retries=3)
 
-    # ---- 拼接到时间轴 --------------------------------------------------
+    print(f"生成 {len(zh_subs)} 条 TTS 语音（voice={TTS_VOICE}, concurrency={concurrency}）...")
+    tts_files = asyncio.run(_generate_all())
 
-    print("拼接 TTS 音频到时间轴...")
+    print("整理 TTS 片段并拼接到时间轴...")
     failed_count = 0
+    max_speed = max(1.0, float(TTS_MAX_SPEED))
+    clip_entries = []
+
     for i, (sub, tts_file) in enumerate(zip(zh_subs, tts_files)):
         if tts_file is None or not os.path.exists(tts_file):
             continue
+
         try:
-            clip = AudioSegment.from_file(tts_file)
+            clip_ms = _probe_audio_duration_ms(tts_file)
         except Exception:
-            print(f"  🔄 第 {i} 条 TTS 解码失败，重新生成...")
-            os.remove(tts_file)
+            print(f"  🔄 第 {i} 条 TTS 探测失败，重新生成...")
+            try:
+                os.remove(tts_file)
+            except OSError:
+                pass
             retry_file = asyncio.run(_retry_one(zh_subs[i], i))
             if retry_file is None:
                 failed_count += 1
                 continue
             try:
-                clip = AudioSegment.from_file(retry_file)
+                clip_ms = _probe_audio_duration_ms(retry_file)
+                tts_file = retry_file
             except Exception:
                 failed_count += 1
-                print(f"  ⚠️  第 {i} 条重试后仍无法解码，跳过")
+                print(f"  ⚠️  第 {i} 条重试后仍无法读取，跳过")
                 continue
 
         start_ms = int(sub.start.total_seconds() * 1000)
         end_ms = int(sub.end.total_seconds() * 1000)
         available_ms = end_ms - start_ms
 
-        if len(clip) > available_ms and available_ms > 0:
-            speed = min(len(clip) / available_ms, TTS_MAX_SPEED)
-            sped_file = os.path.join(tts_tmp_dir, f"{i:04d}_fast.wav")
-            cmd_speed = [
-                "ffmpeg", "-i", tts_file,
-                "-filter:a", f"atempo={speed:.3f}",
-                "-y", sped_file,
-            ]
-            subprocess.run(cmd_speed, capture_output=True, check=True)
-            clip = AudioSegment.from_file(sped_file)
+        prepared_path = tts_file
+        if clip_ms > available_ms and available_ms > 0:
+            speed = min(clip_ms / available_ms, max_speed)
+            if speed > 1.0001:
+                sped_file = os.path.join(tts_tmp_dir, f"{i:04d}_fast.wav")
+                cmd_speed = [
+                    "ffmpeg",
+                    "-hide_banner", "-loglevel", "error",
+                    "-i", tts_file,
+                    "-filter:a", _build_atempo_filter(speed),
+                    "-ar", "44100",
+                    "-ac", "2",
+                    "-y", sped_file,
+                ]
+                subprocess.run(cmd_speed, capture_output=True, check=True)
+                prepared_path = sped_file
 
-        silence = silence.overlay(clip, position=start_ms)
+        clip_entries.append({
+            "path": prepared_path,
+            "start_ms": start_ms,
+        })
 
         if (i + 1) % 20 == 0:
-            print(f"  已拼接 {i + 1}/{len(zh_subs)} 条...")
+            print(f"  已整理 {i + 1}/{len(zh_subs)} 条...")
 
     if failed_count > 0:
         print(f"  ⚠️  共 {failed_count} 条 TTS 生成失败，对应位置将静音")
 
-    silence.export(tts_output, format="wav")
+    clip_entries.sort(key=lambda item: item["start_ms"])
+
+    try:
+        _render_tts_track_ffmpeg(clip_entries, total_ms, tts_output, tts_tmp_dir)
+        print("  ↳ 已使用 ffmpeg 一次性混音")
+    except Exception as exc:
+        print(f"  ⚠️  ffmpeg 混音失败，回退到 pydub: {exc}")
+        _render_tts_track_pydub(clip_entries, total_ms, tts_output)
+
     shutil.rmtree(tts_tmp_dir, ignore_errors=True)
 
     print(f"✅ TTS 语音已生成: {tts_output}")
     return tts_output
 
 
-# ---------------------------------------------------------------------------
-# 步骤 7：合并音频 + 替换音轨
-# ---------------------------------------------------------------------------
-
 def step7_merge_audio(video_path, bg_path, tts_path):
-    """合并背景音 + TTS 语音，替换原视频音轨"""
+    """合并背景音 + TTS 语音，并直接输出最终配音视频"""
     print("\n" + "=" * 60)
-    print("🎬 第七步：合并音频并生成配音视频...")
+    print("🎀 第七步：合并音频并生成配音视频...")
     print("=" * 60)
 
     base = video_path.rsplit(".", 1)[0]
-    mixed_audio = base + "_mixed.wav"
     dubbed_video = base + "_配音.mp4"
 
     if os.path.exists(dubbed_video):
@@ -226,34 +337,24 @@ def step7_merge_audio(video_path, bg_path, tts_path):
         return dubbed_video
 
     bg_vol = TTS_BG_VOLUME
-    print(f"混合音频（背景音量: {bg_vol}）...")
-    cmd_mix = [
+    print(f"混合音频并封装视频（背景音量: {bg_vol}）...")
+    cmd = [
         "ffmpeg",
+        "-hide_banner", "-loglevel", "error", "-stats",
+        "-i", video_path,
         "-i", tts_path,
         "-i", bg_path,
         "-filter_complex",
-        f"[1:a]volume={bg_vol}[bg];[0:a][bg]amix=inputs=2:duration=first:dropout_transition=2[out]",
-        "-map", "[out]",
-        "-acodec", "pcm_s16le",
-        "-ar", "44100",
-        "-y", mixed_audio,
-    ]
-    subprocess.run(cmd_mix, check=True, capture_output=True)
-
-    print("替换视频音轨...")
-    cmd_replace = [
-        "ffmpeg",
-        "-i", video_path,
-        "-i", mixed_audio,
-        "-c:v", "copy",
+        f"[2:a]volume={bg_vol}[bg];[1:a][bg]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[out]",
         "-map", "0:v:0",
-        "-map", "1:a:0",
+        "-map", "[out]",
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-movflags", "+faststart",
         "-y", dubbed_video,
     ]
-    subprocess.run(cmd_replace, check=True, capture_output=True)
-
-    if os.path.exists(mixed_audio):
-        os.remove(mixed_audio)
+    subprocess.run(cmd, check=True, capture_output=True)
 
     print(f"✅ 配音视频已生成: {dubbed_video}")
     return dubbed_video
