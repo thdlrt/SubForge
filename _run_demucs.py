@@ -19,7 +19,14 @@ def _save_soundfile(filepath, src, sample_rate, **kwargs):
 # Monkey-patch torchaudio.save
 torchaudio.save = _save_soundfile
 
-# Now run demucs main with the remaining arguments
-from demucs.separate import main
-sys.argv = [sys.argv[0]] + sys.argv[1:]
-main()
+def main(argv=None):
+    # Now run demucs main with the remaining arguments
+    from demucs.separate import main as demucs_main
+
+    argv = list(sys.argv[1:] if argv is None else argv)
+    sys.argv = [sys.argv[0], *argv]
+    demucs_main()
+
+
+if __name__ == "__main__":
+    main()

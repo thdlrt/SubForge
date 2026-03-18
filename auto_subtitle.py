@@ -12,6 +12,10 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
+from runtime import ensure_app_cwd
+
+ensure_app_cwd()
+
 # ======================== 从模块导入 ========================
 
 # 配置常量（app.py 通过 auto_subtitle.XXXX 访问，需全部重导出）

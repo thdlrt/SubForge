@@ -9,6 +9,7 @@ from pathlib import Path
 from config import (
     MAX_VIDEO_HEIGHT, YTDLP_COOKIES, YTDLP_CLIENT,
 )
+from runtime import output_root, resolve_command
 from utils import sanitize_name
 
 
@@ -45,7 +46,7 @@ def step1_download_video(url, output_dir):
         f"/best"
     )
     cmd = [
-        "yt-dlp",
+        resolve_command("yt-dlp"),
         "-f", fmt,
         "--merge-output-format", "mp4",
         "-o", output_template,
@@ -66,7 +67,7 @@ def step1_download_video(url, output_dir):
     # 用 ffprobe 读取并打印视频规格
     try:
         probe_cmd = [
-            "ffprobe", "-v", "error",
+            resolve_command("ffprobe"), "-v", "error",
             "-select_streams", "v:0",
             "-show_entries", "stream=width,height,r_frame_rate,codec_name,bit_rate",
             "-show_entries", "format=duration,size,bit_rate",
@@ -118,10 +119,11 @@ def prepare_source(source):
     """第一阶段：准备视频（下载或准备本地文件），返回已准备好的视频信息字典。"""
     is_local = os.path.isfile(source)
     try:
+        base_output_root = str(output_root())
         if is_local:
             video_path = os.path.abspath(source)
             video_name = sanitize_name(Path(video_path).stem)
-            output_dir = os.path.join("./output", video_name)
+            output_dir = os.path.join(base_output_root, video_name)
             os.makedirs(output_dir, exist_ok=True)
 
             safe_filename = video_name + Path(video_path).suffix
@@ -135,14 +137,14 @@ def prepare_source(source):
             print(f"📁 本地文件已准备: {video_path}")
         else:
             url = source
-            temp_dir = "./output/_temp_download"
+            temp_dir = os.path.join(base_output_root, "_temp_download")
             os.makedirs(temp_dir, exist_ok=True)
 
             print(f"📥 下载视频: {url}")
 
             pre_file = None
             try:
-                pre_cmd = ["yt-dlp", "--print", "title", "--no-playlist"]
+                pre_cmd = [resolve_command("yt-dlp"), "--print", "title", "--no-playlist"]
                 pre_cmd += _ytdlp_extra_args()
                 pre_cmd.append(url)
                 title_result = subprocess.run(
@@ -151,7 +153,7 @@ def prepare_source(source):
                 )
                 raw_title = title_result.stdout.strip()
                 pre_name = sanitize_name(raw_title)
-                pre_dir  = os.path.join("./output", pre_name)
+                pre_dir  = os.path.join(base_output_root, pre_name)
                 pre_file = os.path.join(pre_dir, pre_name + ".mp4")
             except Exception:
                 pass
@@ -164,7 +166,7 @@ def prepare_source(source):
                 video_path = step1_download_video(url, temp_dir)
 
                 video_name = sanitize_name(Path(video_path).stem)
-                output_dir = os.path.join("./output", video_name)
+                output_dir = os.path.join(base_output_root, video_name)
                 os.makedirs(output_dir, exist_ok=True)
 
                 safe_filename = video_name + Path(video_path).suffix

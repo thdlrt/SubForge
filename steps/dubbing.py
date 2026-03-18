@@ -14,6 +14,7 @@ from config import (
     TTS_VOICE, TTS_RATE, TTS_VOLUME, TTS_BG_VOLUME, TTS_MAX_SPEED,
     TTS_CONCURRENCY,
 )
+from runtime import demucs_worker_command, resolve_command
 
 
 def step5_separate_audio(video_path):
@@ -32,7 +33,7 @@ def step5_separate_audio(video_path):
     audio_path = base + "_audio.wav"
     if not os.path.exists(audio_path):
         cmd_extract = [
-            "ffmpeg",
+            resolve_command("ffmpeg"),
             "-hide_banner", "-loglevel", "error",
             "-i", video_path,
             "-vn", "-sn", "-dn",
@@ -46,15 +47,12 @@ def step5_separate_audio(video_path):
         subprocess.run(cmd_extract, check=True, capture_output=True)
 
     print("运行 demucs 音频分离（首次运行会下载模型）...")
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    wrapper = os.path.join(project_root, "_run_demucs.py")
-    cmd_demucs = [
-        sys.executable, wrapper,
+    cmd_demucs = demucs_worker_command([
         "--two-stems", "vocals",
         "-n", "htdemucs",
         "-o", output_dir,
         audio_path,
-    ]
+    ])
     subprocess.run(cmd_demucs, check=True)
 
     stem_name = Path(audio_path).stem
@@ -77,7 +75,7 @@ def _escape_ffmpeg_filter_path(path):
 
 def _probe_audio_duration_ms(audio_path):
     probe_cmd = [
-        "ffprobe", "-v", "error",
+        resolve_command("ffprobe"), "-v", "error",
         "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1",
         audio_path,
@@ -132,7 +130,7 @@ def _render_tts_track_ffmpeg(clip_entries, total_ms, output_path, work_dir):
     Path(script_path).write_text(";\n".join(lines) + "\n", encoding="utf-8")
 
     cmd = [
-        "ffmpeg",
+        resolve_command("ffmpeg"),
         "-hide_banner", "-loglevel", "error", "-stats",
         "-/filter_complex", script_path,
         "-map", "[out]",
@@ -147,6 +145,12 @@ def _render_tts_track_ffmpeg(clip_entries, total_ms, output_path, work_dir):
 
 def _render_tts_track_pydub(clip_entries, total_ms, output_path):
     from pydub import AudioSegment
+
+    ffmpeg_bin = resolve_command("ffmpeg")
+    ffprobe_bin = resolve_command("ffprobe")
+    AudioSegment.converter = ffmpeg_bin
+    AudioSegment.ffmpeg = ffmpeg_bin
+    AudioSegment.ffprobe = ffprobe_bin
 
     timeline = AudioSegment.silent(duration=total_ms, frame_rate=44100).set_channels(2)
     for idx, clip in enumerate(clip_entries, 1):
@@ -178,7 +182,7 @@ def step6_tts_generate(zh_srt_path, video_path):
 
     total_ms = 0
     probe_cmd = [
-        "ffprobe", "-v", "error",
+        resolve_command("ffprobe"), "-v", "error",
         "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1",
         video_path,
@@ -286,7 +290,7 @@ def step6_tts_generate(zh_srt_path, video_path):
             if speed > 1.0001:
                 sped_file = os.path.join(tts_tmp_dir, f"{i:04d}_fast.wav")
                 cmd_speed = [
-                    "ffmpeg",
+                    resolve_command("ffmpeg"),
                     "-hide_banner", "-loglevel", "error",
                     "-i", tts_file,
                     "-filter:a", _build_atempo_filter(speed),
@@ -339,13 +343,13 @@ def step7_merge_audio(video_path, bg_path, tts_path):
     bg_vol = TTS_BG_VOLUME
     print(f"混合音频并封装视频（背景音量: {bg_vol}）...")
     cmd = [
-        "ffmpeg",
+        resolve_command("ffmpeg"),
         "-hide_banner", "-loglevel", "error", "-stats",
         "-i", video_path,
         "-i", tts_path,
         "-i", bg_path,
         "-filter_complex",
-        f"[2:a]volume={bg_vol}[bg];[1:a][bg]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[out]",
+        f"[2:a]volume={bg_vol}[bg];[1:a][bg]amix=inputs=2:duration=first:dropout_transition=2[out]",
         "-map", "0:v:0",
         "-map", "[out]",
         "-c:v", "copy",
@@ -354,7 +358,20 @@ def step7_merge_audio(video_path, bg_path, tts_path):
         "-movflags", "+faststart",
         "-y", dubbed_video,
     ]
-    subprocess.run(cmd, check=True, capture_output=True)
+    try:
+        subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        if detail:
+            raise RuntimeError(f"ffmpeg 合并失败: {detail}") from exc
+        raise
 
     print(f"✅ 配音视频已生成: {dubbed_video}")
     return dubbed_video

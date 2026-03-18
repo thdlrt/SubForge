@@ -20,6 +20,7 @@ from config import (
     SUBTITLE_SHORT_TAIL_MAX_CHARS, SUBTITLE_SHORT_TAIL_MAX_DURATION_SEC,
     SUBTITLE_SPLIT_MAX_DURATION_SEC,
 )
+from runtime import whisper_worker_command
 
 
 def step2_transcribe(video_path):
@@ -37,8 +38,6 @@ def step2_transcribe(video_path):
         print(f"   ↳ 共读取 {len(subs)} 条字幕")
         return en_srt_path, subs
 
-    wrapper = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                           "_run_whisper.py")
     args_json = json.dumps({
         "video_path": os.path.abspath(video_path),
         "en_srt_path": os.path.abspath(en_srt_path),
@@ -66,7 +65,7 @@ def step2_transcribe(video_path):
     }, ensure_ascii=False)
 
     proc = subprocess.Popen(
-        [sys.executable, "-u", wrapper, args_json],
+        whisper_worker_command(args_json),
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace",
     )

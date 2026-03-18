@@ -4,7 +4,10 @@
 import os
 import json
 
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+from runtime import app_path
+
+CONFIG_PATH = str(app_path("config.json"))
+CONFIG_EXAMPLE_PATH = str(app_path("config.example.json"))
 
 
 def _load_config():
@@ -84,7 +87,10 @@ def _load_config():
                 if k in subtitle_advanced_defaults:
                     cfg["subtitle_advanced"][k] = v
     else:
-        print(f"⚠ 未找到配置文件 {CONFIG_PATH}，使用默认配置")
+        print(
+            f"⚠ 未找到配置文件 {CONFIG_PATH}，使用默认配置。"
+            f"如需填写 API Key，可复制 {CONFIG_EXAMPLE_PATH}"
+        )
     return cfg
 
 

@@ -6,6 +6,7 @@ import sys
 import subprocess
 
 from config import ENHANCE_MODEL, ENHANCE_OUTSCALE
+from runtime import resolve_command
 
 
 def step1b_enhance_video(video_path):
@@ -139,7 +140,7 @@ def step1b_enhance_video(video_path):
 
     print("合并原始音轨...")
     cmd_merge = [
-        "ffmpeg",
+        resolve_command("ffmpeg"),
         "-i", tmp_video,
         "-i", video_path,
         "-c:v", "libx264", "-crf", "18", "-preset", "medium",
