@@ -214,7 +214,7 @@ def build_ui():
                 with gr.Accordion("⚙️ 处理选项", open=False):
                     burn_sub = gr.Checkbox(label="压制硬字幕到视频", value=True)
                     dub_check = gr.Checkbox(
-                        label="AI 中文配音（分离背景音 + edge-tts 语音合成）",
+                        label="AI 中文配音（分离背景音 + 可切换 TTS 引擎）",
                         value=True,
                     )
                     enhance_check = gr.Checkbox(
@@ -226,6 +226,11 @@ def build_ui():
                         value=False,
                     )
                     gr.Markdown(
+                        (
+                            f"**当前 TTS**: `Qwen TTS` · 模型 `{auto_subtitle.QWEN_TTS_MODEL}` · 音色 `{auto_subtitle.QWEN_TTS_VOICE}`\n\n"
+                            if auto_subtitle.TTS_PROVIDER == "qwen"
+                            else f"**当前 TTS**: `edge-tts` · 音色 `{auto_subtitle.TTS_VOICE}`\n\n"
+                        ) +
                         f"**当前配置** *(来自 config.json)*\n\n"
                         f"- 语音模型: `{auto_subtitle.WHISPER_MODEL}` · "
                         f"语言: `{auto_subtitle.VIDEO_LANGUAGE}`\n"

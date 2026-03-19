@@ -39,11 +39,16 @@
     "subtitle_outline": 1,
     "subtitle_shadow": 0,
     "subtitle_margin_v": 30,
+    "tts_provider": "edge",
     "tts_voice": "zh-CN-YunjianNeural",
     "tts_rate": "+0%",
     "tts_volume": "+0%",
     "tts_bg_volume": 0.5,
     "tts_max_speed": 1.5,
+    "qwen_tts_api_key": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
+    "qwen_tts_base_url": "https://dashscope.aliyuncs.com/api/v1",
+    "qwen_tts_model": "qwen3-tts-flash",
+    "qwen_tts_voice": "Cherry",
     "enhance_model": "RealESRGAN_x4plus",
     "enhance_outscale": 4
 }

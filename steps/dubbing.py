@@ -2,16 +2,21 @@
 步骤 5–7：AI 配音（demucs 分离 → edge-tts 合成 → 合并音轨）
 """
 import asyncio
+import json
 import os
 import shutil
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import srt
 
 from config import (
-    TTS_VOICE, TTS_RATE, TTS_VOLUME, TTS_BG_VOLUME, TTS_MAX_SPEED,
+    API_RETRY, API_SLEEP,
+    QWEN_TTS_API_KEY, QWEN_TTS_BASE_URL, QWEN_TTS_MODEL, QWEN_TTS_VOICE,
+    TTS_PROVIDER, TTS_VOICE, TTS_RATE, TTS_VOLUME, TTS_BG_VOLUME, TTS_MAX_SPEED,
 )
 
 
@@ -76,14 +81,58 @@ def step5_separate_audio(video_path):
 # 步骤 6：TTS 语音合成
 # ---------------------------------------------------------------------------
 
+def _qwen_tts_api_url():
+    base = (QWEN_TTS_BASE_URL or "https://dashscope.aliyuncs.com/api/v1").rstrip("/")
+    return f"{base}/services/aigc/multimodal-generation/generation"
+
+
+def _qwen_tts_download(text, out_file):
+    payload = {
+        "model": QWEN_TTS_MODEL,
+        "input": {
+            "text": " ".join(text.splitlines()).strip(),
+            "voice": QWEN_TTS_VOICE,
+            "language_type": "Chinese",
+        },
+    }
+    req = urllib.request.Request(
+        _qwen_tts_api_url(),
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {QWEN_TTS_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"Qwen TTS 请求失败: {detail or exc}") from exc
+
+    audio_url = body.get("output", {}).get("audio", {}).get("url")
+    if not audio_url:
+        message = body.get("message") or body.get("code") or "Qwen TTS 未返回音频地址"
+        raise RuntimeError(message)
+
+    with urllib.request.urlopen(audio_url, timeout=90) as audio_resp:
+        with open(out_file, "wb") as f:
+            f.write(audio_resp.read())
+
+
 def step6_tts_generate(zh_srt_path, video_path):
-    """用 edge-tts 为中文字幕生成语音"""
+    """为中文字幕生成语音，支持 edge-tts / qwen tts。"""
     print("\n" + "=" * 60)
-    print("🗣️  第六步：AI 语音合成（edge-tts）...")
+    provider = (TTS_PROVIDER or "edge").strip().lower()
+    provider_label = "Qwen TTS" if provider == "qwen" else "edge-tts"
+    print(f"🗣️  第六步：AI 语音合成（{provider_label}）...")
     print("=" * 60)
 
-    import edge_tts
     from pydub import AudioSegment
+    if provider == "edge":
+        import edge_tts
 
     base = video_path.rsplit(".", 1)[0]
     tts_output = base + "_tts.wav"
@@ -116,22 +165,30 @@ def step6_tts_generate(zh_srt_path, video_path):
     os.makedirs(tts_tmp_dir, exist_ok=True)
 
     # ---- 异步 TTS 生成 ------------------------------------------------
+    semaphore = asyncio.Semaphore(4 if provider == "qwen" else 12)
 
-    async def _generate_one(sub, idx, max_retries=3):
+    async def _generate_one(sub, idx, max_retries=max(int(API_RETRY), 1)):
         text = sub.content.strip()
         if not text:
             return None
-        out_file = os.path.join(tts_tmp_dir, f"{idx:04d}.mp3")
+        ext = "wav" if provider == "qwen" else "mp3"
+        out_file = os.path.join(tts_tmp_dir, f"{idx:04d}.{ext}")
         if os.path.exists(out_file):
             if os.path.getsize(out_file) >= 256:
                 return out_file
             os.remove(out_file)
         for attempt in range(1, max_retries + 1):
             try:
-                communicate = edge_tts.Communicate(
-                    text=text, voice=TTS_VOICE, rate=TTS_RATE, volume=TTS_VOLUME,
-                )
-                await communicate.save(out_file)
+                async with semaphore:
+                    if provider == "qwen":
+                        if not QWEN_TTS_API_KEY:
+                            raise RuntimeError("未配置 qwen_tts_api_key")
+                        await asyncio.to_thread(_qwen_tts_download, text, out_file)
+                    else:
+                        communicate = edge_tts.Communicate(
+                            text=text, voice=TTS_VOICE, rate=TTS_RATE, volume=TTS_VOLUME,
+                        )
+                        await communicate.save(out_file)
                 if os.path.exists(out_file) and os.path.getsize(out_file) >= 256:
                     return out_file
                 if os.path.exists(out_file):
@@ -140,7 +197,7 @@ def step6_tts_generate(zh_srt_path, video_path):
                 if os.path.exists(out_file):
                     os.remove(out_file)
                 if attempt < max_retries:
-                    await asyncio.sleep(0.5 * attempt)
+                    await asyncio.sleep(max(float(API_SLEEP), 0.5) * attempt)
                 else:
                     print(f"  ⚠️  TTS 第 {idx} 条生成失败（已重试 {max_retries} 次）: {e}")
         return None
@@ -148,11 +205,12 @@ def step6_tts_generate(zh_srt_path, video_path):
     async def _generate_all():
         return await asyncio.gather(*[_generate_one(sub, i) for i, sub in enumerate(zh_subs)])
 
-    print(f"生成 {len(zh_subs)} 条 TTS 语音（voice={TTS_VOICE}）...")
+    active_voice = QWEN_TTS_VOICE if provider == "qwen" else TTS_VOICE
+    print(f"生成 {len(zh_subs)} 条 TTS 语音（provider={provider}, voice={active_voice}）...")
     tts_files = asyncio.run(_generate_all())
 
     async def _retry_one(sub, idx):
-        return await _generate_one(sub, idx, max_retries=3)
+        return await _generate_one(sub, idx, max_retries=max(int(API_RETRY), 1))
 
     # ---- 拼接到时间轴 --------------------------------------------------
 

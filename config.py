@@ -33,11 +33,16 @@ def _load_config():
         "subtitle_outline": 1,
         "subtitle_shadow": 0,
         "subtitle_margin_v": 30,
+        "tts_provider": "edge",
         "tts_voice": "zh-CN-YunjianNeural",
         "tts_rate": "+0%",
         "tts_volume": "+0%",
         "tts_bg_volume": 0.5,
         "tts_max_speed": 1.5,
+        "qwen_tts_api_key": "",
+        "qwen_tts_base_url": "https://dashscope.aliyuncs.com/api/v1",
+        "qwen_tts_model": "qwen3-tts-flash",
+        "qwen_tts_voice": "Cherry",
         "enhance_model": "RealESRGAN_x4plus",
         "enhance_outscale": 4,
     }
@@ -127,11 +132,16 @@ SUBTITLE_OUTLINE_COLOR = _cfg["subtitle_outline_color"]
 SUBTITLE_OUTLINE       = _cfg["subtitle_outline"]
 SUBTITLE_SHADOW        = _cfg["subtitle_shadow"]
 SUBTITLE_MARGIN_V      = _cfg["subtitle_margin_v"]
+TTS_PROVIDER           = _cfg["tts_provider"]
 TTS_VOICE              = _cfg["tts_voice"]
 TTS_RATE               = _cfg["tts_rate"]
 TTS_VOLUME             = _cfg["tts_volume"]
 TTS_BG_VOLUME          = _cfg["tts_bg_volume"]
 TTS_MAX_SPEED          = _cfg["tts_max_speed"]
+QWEN_TTS_API_KEY       = _cfg["qwen_tts_api_key"]
+QWEN_TTS_BASE_URL      = _cfg["qwen_tts_base_url"]
+QWEN_TTS_MODEL         = _cfg["qwen_tts_model"]
+QWEN_TTS_VOICE         = _cfg["qwen_tts_voice"]
 ENHANCE_MODEL          = _cfg["enhance_model"]
 ENHANCE_OUTSCALE       = _cfg["enhance_outscale"]
 
