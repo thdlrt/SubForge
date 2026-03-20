@@ -4,11 +4,7 @@
 import os
 import subprocess
 
-from config import (
-    FONT_SIZE, SUBTITLE_FONT, SUBTITLE_PRIMARY_COLOR,
-    SUBTITLE_OUTLINE_COLOR, SUBTITLE_OUTLINE, SUBTITLE_SHADOW,
-    SUBTITLE_MARGIN_V,
-)
+import config
 
 
 def step4_burn_subtitles(video_path, srt_path):
@@ -26,13 +22,13 @@ def step4_burn_subtitles(video_path, srt_path):
     srt_escaped = srt_path.replace("\\", "/").replace("'", "\\'").replace(":", "\\:")
 
     style = (
-        f"FontSize={FONT_SIZE}"
-        f",FontName={SUBTITLE_FONT}"
-        f",PrimaryColour={SUBTITLE_PRIMARY_COLOR}"
-        f",OutlineColour={SUBTITLE_OUTLINE_COLOR}"
-        f",Outline={SUBTITLE_OUTLINE}"
-        f",Shadow={SUBTITLE_SHADOW}"
-        f",MarginV={SUBTITLE_MARGIN_V}"
+        f"FontSize={config.FONT_SIZE}"
+        f",FontName={config.SUBTITLE_FONT}"
+        f",PrimaryColour={config.SUBTITLE_PRIMARY_COLOR}"
+        f",OutlineColour={config.SUBTITLE_OUTLINE_COLOR}"
+        f",Outline={config.SUBTITLE_OUTLINE}"
+        f",Shadow={config.SUBTITLE_SHADOW}"
+        f",MarginV={config.SUBTITLE_MARGIN_V}"
         f",Bold=1"
     )
     subtitle_filter = f"subtitles='{srt_escaped}':force_style='{style}'"

@@ -6,6 +6,8 @@ openai>=1.50.0
 srt>=3.5.3
 yt-dlp>=2025.1.0
 gradio>=4.44.0
+# 独立桌面窗口：python app.py --window  （需先安装）
+pywebview>=5.0
 
 demucs>=4.0.1
 edge-tts>=6.1.12

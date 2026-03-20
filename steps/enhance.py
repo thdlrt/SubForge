@@ -5,7 +5,7 @@ import os
 import sys
 import subprocess
 
-from config import ENHANCE_MODEL, ENHANCE_OUTSCALE
+import config
 
 
 def step1b_enhance_video(video_path):
@@ -41,8 +41,8 @@ def step1b_enhance_video(video_path):
             f"错误详情: {e}"
         )
 
-    model_name = ENHANCE_MODEL
-    outscale   = ENHANCE_OUTSCALE
+    model_name = config.ENHANCE_MODEL
+    outscale   = config.ENHANCE_OUTSCALE
 
     MODEL_CONFIGS = {
         "RealESRGAN_x4plus": {

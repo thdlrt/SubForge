@@ -6,7 +6,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from config import QWEN_TTS_API_KEY, QWEN_TTS_BASE_URL, QWEN_TTS_MODEL, QWEN_TTS_VOICE
+import config
 
 
 DEFAULT_TEXT = (
@@ -16,13 +16,13 @@ DEFAULT_TEXT = (
 
 
 def qwen_tts_api_url() -> str:
-    base = (QWEN_TTS_BASE_URL or "https://dashscope.aliyuncs.com/api/v1").rstrip("/")
+    base = (config.QWEN_TTS_BASE_URL or "https://dashscope.aliyuncs.com/api/v1").rstrip("/")
     return f"{base}/services/aigc/multimodal-generation/generation"
 
 
 def qwen_tts_download(text: str, voice: str, out_file: Path) -> None:
     payload = {
-        "model": QWEN_TTS_MODEL,
+        "model": config.QWEN_TTS_MODEL,
         "input": {
             "text": " ".join(text.splitlines()).strip(),
             "voice": voice,
@@ -33,7 +33,7 @@ def qwen_tts_download(text: str, voice: str, out_file: Path) -> None:
         qwen_tts_api_url(),
         data=json.dumps(payload).encode("utf-8"),
         headers={
-            "Authorization": f"Bearer {QWEN_TTS_API_KEY}",
+            "Authorization": f"Bearer {config.QWEN_TTS_API_KEY}",
             "Content-Type": "application/json",
         },
         method="POST",
@@ -58,12 +58,12 @@ def qwen_tts_download(text: str, voice: str, out_file: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--voice", default=QWEN_TTS_VOICE or "Cherry")
+    parser.add_argument("--voice", default=config.QWEN_TTS_VOICE or "Cherry")
     parser.add_argument("--text", default=DEFAULT_TEXT)
     parser.add_argument("--out", default="voice_reference_cherry.wav")
     args = parser.parse_args()
 
-    if not QWEN_TTS_API_KEY:
+    if not config.QWEN_TTS_API_KEY:
         raise SystemExit("未配置 qwen_tts_api_key，无法生成参考音色")
 
     output_path = Path(args.out).expanduser()

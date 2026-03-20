@@ -115,7 +115,21 @@ AI 画质增强（Real-ESRGAN）仅支持 NVIDIA GPU（CUDA）；无 CUDA 时会
 python app.py
 ```
 
-启动后自动打开浏览器访问 `http://127.0.0.1:7860`，在界面中：
+**独立桌面窗口**（套壳浏览器，依赖 `pywebview`，Windows 一般自带 WebView2 运行时）：
+
+```bash
+pip install pywebview
+python app.py --window
+# 或简写
+python app.py -w
+```
+
+默认仍会在系统浏览器中打开 `http://127.0.0.1:7860`；加 `--window` 时用独立窗口加载同一地址，可用 `--host` / `--port` 改监听。
+
+启动后在界面中：
+
+- **设置** 标签页：表单与 **JSON 编辑器实时联动**；**保存并应用** 会写入 `config.json` 并 **自动重启本程序**，新进程重新加载配置，避免内存与磁盘不一致。
+- **处理** 标签页：
 
 1. 粘贴 YouTube 链接（每行一个）和/或上传本地视频文件
 2. 可选择是否压制硬字幕、是否启用 AI 中文配音、是否启用 AI 画质增强、是否启用 AI 内容总结
@@ -403,6 +417,7 @@ Copy-Item "$env:CONDA_PREFIX\..\..\Library\bin\liblzma.dll" "$env:CONDA_PREFIX\L
 SubForge/
 ├── auto_subtitle.py          # 核心处理脚本（多步流水线入口）
 ├── app.py                    # Gradio Web UI
+├── settings_ui.py            # Web「设置」页（编辑并保存 config.json）
 ├── config.py                 # 读取 config.json 的运行时常量
 ├── config.example.json       # 配置模板（复制为 config.json）
 ├── config.json               # 本地配置（已被 .gitignore 忽略）

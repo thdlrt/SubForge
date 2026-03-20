@@ -6,27 +6,25 @@ import subprocess
 import sys
 from pathlib import Path
 
-from config import (
-    MAX_VIDEO_HEIGHT, YTDLP_COOKIES, YTDLP_CLIENT,
-)
+import config
 from utils import sanitize_name
 
 
 def _ytdlp_extra_args():
     """返回 yt-dlp 的 cookie + client 参数列表"""
     args = []
-    if YTDLP_CLIENT:
-        args += ["--extractor-args", f"youtube:player_client={YTDLP_CLIENT}"]
-        print(f"   YouTube 客户端: {YTDLP_CLIENT}")
-    if not YTDLP_COOKIES:
+    if config.YTDLP_CLIENT:
+        args += ["--extractor-args", f"youtube:player_client={config.YTDLP_CLIENT}"]
+        print(f"   YouTube 客户端: {config.YTDLP_CLIENT}")
+    if not config.YTDLP_COOKIES:
         return args
-    if os.path.isfile(YTDLP_COOKIES):
-        print(f"   使用 cookies 文件: {YTDLP_COOKIES}")
-        return args + ["--cookies", YTDLP_COOKIES]
-    if os.path.sep not in YTDLP_COOKIES and "/" not in YTDLP_COOKIES and not YTDLP_COOKIES.endswith(".txt"):
-        print(f"   从浏览器读取 cookies: {YTDLP_COOKIES}")
-        return args + ["--cookies-from-browser", YTDLP_COOKIES]
-    print(f"   ⚠ cookies 文件不存在: {YTDLP_COOKIES}，将不使用 cookies")
+    if os.path.isfile(config.YTDLP_COOKIES):
+        print(f"   使用 cookies 文件: {config.YTDLP_COOKIES}")
+        return args + ["--cookies", config.YTDLP_COOKIES]
+    if os.path.sep not in config.YTDLP_COOKIES and "/" not in config.YTDLP_COOKIES and not config.YTDLP_COOKIES.endswith(".txt"):
+        print(f"   从浏览器读取 cookies: {config.YTDLP_COOKIES}")
+        return args + ["--cookies-from-browser", config.YTDLP_COOKIES]
+    print(f"   ⚠ cookies 文件不存在: {config.YTDLP_COOKIES}，将不使用 cookies")
     return args
 
 
@@ -39,8 +37,8 @@ def step1_download_video(url, output_dir):
     output_template = os.path.join(output_dir, "%(title)s.%(ext)s")
 
     fmt = (
-        f"bestvideo[height<={MAX_VIDEO_HEIGHT}]+bestaudio"
-        f"/best[height<={MAX_VIDEO_HEIGHT}]"
+        f"bestvideo[height<={config.MAX_VIDEO_HEIGHT}]+bestaudio"
+        f"/best[height<={config.MAX_VIDEO_HEIGHT}]"
         f"/bestvideo+bestaudio"
         f"/best"
     )

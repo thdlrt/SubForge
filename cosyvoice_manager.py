@@ -13,17 +13,7 @@ import urllib.request
 from urllib.parse import urlparse
 from pathlib import Path
 
-from config import (
-    COSYVOICE_API_URL,
-    COSYVOICE_DEVICE,
-    COSYVOICE_FP16,
-    COSYVOICE_MODEL_ID,
-    COSYVOICE_MODEL_SOURCE,
-    COSYVOICE_PORT,
-    COSYVOICE_REPO_URL,
-    COSYVOICE_START_TIMEOUT,
-    COSYVOICE_TTSFRD_ID,
-)
+import config
 
 
 ROOT = Path(__file__).resolve().parent
@@ -41,16 +31,16 @@ def _venv_python() -> Path:
 
 def _healthcheck() -> bool:
     try:
-        with urllib.request.urlopen(f"{COSYVOICE_API_URL.rstrip('/')}/health", timeout=5) as resp:
+        with urllib.request.urlopen(f"{config.COSYVOICE_API_URL.rstrip('/')}/health", timeout=5) as resp:
             return resp.status == 200
     except Exception:
         return False
 
 
 def _server_host_port() -> tuple[str, int]:
-    parsed = urlparse(COSYVOICE_API_URL)
+    parsed = urlparse(config.COSYVOICE_API_URL)
     host = parsed.hostname or "127.0.0.1"
-    port = parsed.port or int(COSYVOICE_PORT)
+    port = parsed.port or int(config.COSYVOICE_PORT)
     return host, port
 
 
@@ -73,9 +63,9 @@ def _spawn_server() -> None:
         )
 
     env = os.environ.copy()
-    env["COSYVOICE_MODEL_DIR_NAME"] = Path(COSYVOICE_MODEL_ID).name
-    env["COSYVOICE_DEVICE"] = str(COSYVOICE_DEVICE)
-    env["COSYVOICE_FP16"] = "1" if COSYVOICE_FP16 else "0"
+    env["COSYVOICE_MODEL_DIR_NAME"] = Path(config.COSYVOICE_MODEL_ID).name
+    env["COSYVOICE_DEVICE"] = str(config.COSYVOICE_DEVICE)
+    env["COSYVOICE_FP16"] = "1" if config.COSYVOICE_FP16 else "0"
     proc = subprocess.Popen(
         [str(py), str(SERVER_SCRIPT), "--host", host, "--port", str(port)],
         cwd=str(COSYVOICE_ROOT),
@@ -117,15 +107,15 @@ def ensure_cosyvoice_service() -> None:
             sys.executable,
             str(BOOTSTRAP_SCRIPT),
             "--repo-url",
-            COSYVOICE_REPO_URL,
+            config.COSYVOICE_REPO_URL,
             "--model-id",
-            COSYVOICE_MODEL_ID,
+            config.COSYVOICE_MODEL_ID,
             "--ttsfrd-id",
-            COSYVOICE_TTSFRD_ID,
+            config.COSYVOICE_TTSFRD_ID,
             "--model-source",
-            COSYVOICE_MODEL_SOURCE,
+            config.COSYVOICE_MODEL_SOURCE,
             "--device",
-            COSYVOICE_DEVICE,
+            config.COSYVOICE_DEVICE,
         ],
         check=True,
         cwd=str(COSYVOICE_ROOT),
@@ -135,7 +125,7 @@ def ensure_cosyvoice_service() -> None:
         return
 
     _spawn_server()
-    deadline = time.time() + max(int(COSYVOICE_START_TIMEOUT), 30)
+    deadline = time.time() + max(int(config.COSYVOICE_START_TIMEOUT), 30)
     while time.time() < deadline:
         if _healthcheck():
             return

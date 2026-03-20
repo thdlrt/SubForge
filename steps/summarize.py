@@ -8,7 +8,7 @@ from datetime import datetime
 import srt
 from openai import OpenAI
 
-from config import QWEN_API_KEY, QWEN_BASE_URL, QWEN_MODEL, API_RETRY
+import config
 
 _SUMMARY_SYSTEM_PROMPT = """你是一名资深内容策划与技术编辑。请基于字幕内容，产出专业、结构化、可执行的中文总结。
 
@@ -72,7 +72,7 @@ def step2_5_summarize_from_srt(en_srt_path, video_path):
     print("🧠 第二点五步：AI 内容概括总结（中文 Markdown）...")
     print("=" * 60)
 
-    if not QWEN_API_KEY:
+    if not config.QWEN_API_KEY:
         raise RuntimeError("未配置 qwen_api_key，无法执行 AI 内容概括总结")
 
     summary_md_path = video_path.rsplit(".", 1)[0] + "_summary.md"
@@ -89,7 +89,7 @@ def step2_5_summarize_from_srt(en_srt_path, video_path):
     if not transcript:
         raise RuntimeError(f"字幕内容为空，无法总结: {en_srt_path}")
 
-    client = OpenAI(api_key=QWEN_API_KEY, base_url=QWEN_BASE_URL)
+    client = OpenAI(api_key=config.QWEN_API_KEY, base_url=config.QWEN_BASE_URL)
 
     user_prompt = (
         "请根据下列英文字幕生成中文专业总结。\\n"
@@ -100,10 +100,10 @@ def step2_5_summarize_from_srt(en_srt_path, video_path):
 
     last_err = None
     summary_md = ""
-    for attempt in range(API_RETRY):
+    for attempt in range(config.API_RETRY):
         try:
             resp = client.chat.completions.create(
-                model=QWEN_MODEL,
+                model=config.QWEN_MODEL,
                 messages=[
                     {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
@@ -127,7 +127,7 @@ def step2_5_summarize_from_srt(en_srt_path, video_path):
         "# 视频内容专业总结\n\n"
         f"- 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
         f"- 来源字幕: {os.path.basename(en_srt_path)}\n"
-        f"- 模型: {QWEN_MODEL}\n\n"
+        f"- 模型: {config.QWEN_MODEL}\n\n"
     )
 
     with open(summary_md_path, "w", encoding="utf-8") as f:

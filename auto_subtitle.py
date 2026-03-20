@@ -1,4 +1,4 @@
-﻿"""
+"""
 YouTube 视频下载 + AI字幕生成 + Qwen3.5 API翻译 + 字幕压制 一键脚本
 使用方法: python auto_subtitle.py "https://www.youtube.com/watch?v=XXXXX"
 """
@@ -14,8 +14,8 @@ if hasattr(sys.stderr, "reconfigure"):
 
 # ======================== 从模块导入 ========================
 
-# 配置常量（app.py 通过 auto_subtitle.XXXX 访问，需全部重导出）
-from config import *  # noqa: F401,F403
+# 配置统一从 config 模块读取，便于 Web 保存后热更新
+import config  # noqa: F401
 
 # 各步骤函数
 from steps.download   import step1_download_video, prepare_source as _prepare_source
@@ -52,8 +52,8 @@ def _process_prepared(prepared, burn_subtitle=True, enable_dubbing=False,
     output_dir = prepared["output_dir"]
 
     print(f"\n   工作目录: {os.path.abspath(output_dir)}")
-    print(f"   语音识别: faster-whisper [{WHISPER_MODEL}] ← 本地 GPU")
-    print(f"   翻译引擎: Qwen3.5 API [{QWEN_MODEL}] ← 云端大模型")
+    print(f"   语音识别: faster-whisper [{config.WHISPER_MODEL}] ← 本地 GPU")
+    print(f"   翻译引擎: Qwen3.5 API [{config.QWEN_MODEL}] ← 云端大模型")
 
     current_step = "初始化"
     en_srt_path = zh_srt_path = bi_srt_path = None

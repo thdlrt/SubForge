@@ -13,14 +13,7 @@ from pathlib import Path
 
 import srt
 
-from config import (
-    API_RETRY, API_SLEEP,
-    COSYVOICE_API_URL, COSYVOICE_MODE, COSYVOICE_MERGE_MAX_CHARS, COSYVOICE_PROMPT_AUDIO_PATH,
-    COSYVOICE_PROMPT_TEXT, COSYVOICE_REQUEST_TIMEOUT, COSYVOICE_VOICE,
-    QWEN_TTS_API_KEY, QWEN_TTS_BASE_URL, QWEN_TTS_MODEL, QWEN_TTS_VOICE,
-    TTS_PROVIDER, TTS_VOICE, TTS_RATE, TTS_VOLUME, TTS_BG_VOLUME, TTS_MAX_SPEED,
-    TTS_MERGE_GAP_MS, TTS_MERGE_MAX_CHARS,
-)
+import config
 from cosyvoice_manager import ensure_cosyvoice_service
 
 
@@ -86,16 +79,16 @@ def step5_separate_audio(video_path):
 # ---------------------------------------------------------------------------
 
 def _qwen_tts_api_url():
-    base = (QWEN_TTS_BASE_URL or "https://dashscope.aliyuncs.com/api/v1").rstrip("/")
+    base = (config.QWEN_TTS_BASE_URL or "https://dashscope.aliyuncs.com/api/v1").rstrip("/")
     return f"{base}/services/aigc/multimodal-generation/generation"
 
 
 def _qwen_tts_download(text, out_file):
     payload = {
-        "model": QWEN_TTS_MODEL,
+        "model": config.QWEN_TTS_MODEL,
         "input": {
             "text": " ".join(text.splitlines()).strip(),
-            "voice": QWEN_TTS_VOICE,
+            "voice": config.QWEN_TTS_VOICE,
             "language_type": "Chinese",
         },
     }
@@ -103,7 +96,7 @@ def _qwen_tts_download(text, out_file):
         _qwen_tts_api_url(),
         data=json.dumps(payload).encode("utf-8"),
         headers={
-            "Authorization": f"Bearer {QWEN_TTS_API_KEY}",
+            "Authorization": f"Bearer {config.QWEN_TTS_API_KEY}",
             "Content-Type": "application/json",
         },
         method="POST",
@@ -129,19 +122,19 @@ def _qwen_tts_download(text, out_file):
 def _cosyvoice_tts_download(text, out_file):
     payload = {
         "text": " ".join(text.splitlines()).strip(),
-        "mode": (COSYVOICE_MODE or "preset").strip().lower(),
-        "voice": COSYVOICE_VOICE,
-        "prompt_audio_path": COSYVOICE_PROMPT_AUDIO_PATH,
-        "prompt_text": COSYVOICE_PROMPT_TEXT,
+        "mode": (config.COSYVOICE_MODE or "preset").strip().lower(),
+        "voice": config.COSYVOICE_VOICE,
+        "prompt_audio_path": config.COSYVOICE_PROMPT_AUDIO_PATH,
+        "prompt_text": config.COSYVOICE_PROMPT_TEXT,
     }
     req = urllib.request.Request(
-        f"{COSYVOICE_API_URL.rstrip('/')}/tts",
+        f"{config.COSYVOICE_API_URL.rstrip('/')}/tts",
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=float(COSYVOICE_REQUEST_TIMEOUT)) as resp:
+        with urllib.request.urlopen(req, timeout=float(config.COSYVOICE_REQUEST_TIMEOUT)) as resp:
             audio_bytes = resp.read()
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore")
@@ -176,8 +169,8 @@ def _build_tts_units(subs, merge_max_chars: int | None = None):
 
     units = []
     current = None
-    max_gap_ms = max(int(TTS_MERGE_GAP_MS), 0)
-    max_chars = max(int(merge_max_chars if merge_max_chars is not None else TTS_MERGE_MAX_CHARS), 1)
+    max_gap_ms = max(int(config.TTS_MERGE_GAP_MS), 0)
+    max_chars = max(int(merge_max_chars if merge_max_chars is not None else config.TTS_MERGE_MAX_CHARS), 1)
 
     for idx, sub in enumerate(subs):
         text = _subtitle_text(sub)
@@ -221,7 +214,9 @@ def _build_tts_units(subs, merge_max_chars: int | None = None):
 def step6_tts_generate(zh_srt_path, video_path):
     """为中文字幕生成语音，支持 edge-tts / qwen tts。"""
     print("\n" + "=" * 60)
-    provider = (TTS_PROVIDER or "edge").strip().lower()
+    provider = (config.TTS_PROVIDER or "edge").strip().lower()
+    if provider in ("qwen_tts", "qwen-tts"):
+        provider = "qwen"
     provider_label = {
         "qwen": "Qwen TTS",
         "cosyvoice": "CosyVoice",
@@ -253,15 +248,15 @@ def step6_tts_generate(zh_srt_path, video_path):
     # 读取中文字幕
     with open(zh_srt_path, encoding="utf-8") as f:
         zh_subs = list(srt.parse(f.read()))
-    merge_max = max(int(TTS_MERGE_MAX_CHARS), 1)
-    if provider == "cosyvoice" and int(COSYVOICE_MERGE_MAX_CHARS) > 0:
-        merge_max = min(merge_max, int(COSYVOICE_MERGE_MAX_CHARS))
+    merge_max = max(int(config.TTS_MERGE_MAX_CHARS), 1)
+    if provider == "cosyvoice" and int(config.COSYVOICE_MERGE_MAX_CHARS) > 0:
+        merge_max = min(merge_max, int(config.COSYVOICE_MERGE_MAX_CHARS))
     synth_units = _build_tts_units(zh_subs, merge_max_chars=merge_max)
     if not synth_units:
         raise RuntimeError("中文字幕为空，无法生成 TTS")
     print(
         f"TTS 分组优化：原字幕 {len(zh_subs)} 条 -> 合成分组 {len(synth_units)} 组 "
-        f"(merge_gap_ms={TTS_MERGE_GAP_MS}, merge_max_chars={merge_max})"
+        f"(merge_gap_ms={config.TTS_MERGE_GAP_MS}, merge_max_chars={merge_max})"
     )
     if provider == "cosyvoice":
         print(
@@ -294,7 +289,7 @@ def step6_tts_generate(zh_srt_path, video_path):
     _emit_tts_progress(0, total_units, "generate", f"准备生成 {len(synth_units)} 组语音")
     semaphore = asyncio.Semaphore(1 if provider == "cosyvoice" else (4 if provider == "qwen" else 12))
 
-    async def _generate_one(unit, idx, max_retries=max(int(API_RETRY), 1)):
+    async def _generate_one(unit, idx, max_retries=max(int(config.API_RETRY), 1)):
         text = unit["text"].strip()
         if not text:
             return idx, None
@@ -308,14 +303,14 @@ def step6_tts_generate(zh_srt_path, video_path):
             try:
                 async with semaphore:
                     if provider == "qwen":
-                        if not QWEN_TTS_API_KEY:
+                        if not config.QWEN_TTS_API_KEY:
                             raise RuntimeError("未配置 qwen_tts_api_key")
                         await asyncio.to_thread(_qwen_tts_download, text, out_file)
                     elif provider == "cosyvoice":
                         await asyncio.to_thread(_cosyvoice_tts_download, text, out_file)
                     else:
                         communicate = edge_tts.Communicate(
-                            text=text, voice=TTS_VOICE, rate=TTS_RATE, volume=TTS_VOLUME,
+                            text=text, voice=config.TTS_VOICE, rate=config.TTS_RATE, volume=config.TTS_VOLUME,
                         )
                         await communicate.save(out_file)
                 if os.path.exists(out_file) and os.path.getsize(out_file) >= 256:
@@ -326,7 +321,7 @@ def step6_tts_generate(zh_srt_path, video_path):
                 if os.path.exists(out_file):
                     os.remove(out_file)
                 if attempt < max_retries:
-                    await asyncio.sleep(max(float(API_SLEEP), 0.5) * attempt)
+                    await asyncio.sleep(max(float(config.API_SLEEP), 0.5) * attempt)
                 else:
                     print(f"  ⚠️  TTS 第 {idx} 条生成失败（已重试 {max_retries} 次）: {e}")
         return idx, None
@@ -350,20 +345,20 @@ def step6_tts_generate(zh_srt_path, video_path):
         return results
 
     if provider == "qwen":
-        active_voice = QWEN_TTS_VOICE
+        active_voice = config.QWEN_TTS_VOICE
     elif provider == "cosyvoice":
         active_voice = (
-            f"{COSYVOICE_MODE}:{os.path.basename(COSYVOICE_PROMPT_AUDIO_PATH) or COSYVOICE_VOICE}"
-            if (COSYVOICE_MODE or "preset").strip().lower() != "preset"
-            else COSYVOICE_VOICE
+            f"{config.COSYVOICE_MODE}:{os.path.basename(config.COSYVOICE_PROMPT_AUDIO_PATH) or config.COSYVOICE_VOICE}"
+            if (config.COSYVOICE_MODE or "preset").strip().lower() != "preset"
+            else config.COSYVOICE_VOICE
         )
     else:
-        active_voice = TTS_VOICE
+        active_voice = config.TTS_VOICE
     print(f"生成 {len(synth_units)} 组 TTS 语音（provider={provider}, voice={active_voice}）...")
     tts_files = asyncio.run(_generate_all())
 
     async def _retry_one(unit, idx):
-        return await _generate_one(unit, idx, max_retries=max(int(API_RETRY), 1))
+        return await _generate_one(unit, idx, max_retries=max(int(config.API_RETRY), 1))
 
     # ---- 拼接到时间轴 --------------------------------------------------
 
@@ -397,7 +392,7 @@ def step6_tts_generate(zh_srt_path, video_path):
         available_ms = end_ms - start_ms
 
         if len(clip) > available_ms and available_ms > 0:
-            speed = min(len(clip) / available_ms, TTS_MAX_SPEED)
+            speed = min(len(clip) / available_ms, config.TTS_MAX_SPEED)
             sped_file = os.path.join(tts_tmp_dir, f"{i:04d}_fast.wav")
             cmd_speed = [
                 "ffmpeg", "-i", tts_file,
@@ -442,7 +437,7 @@ def step7_merge_audio(video_path, bg_path, tts_path):
         print(f"⏭️  配音视频已存在，跳过: {dubbed_video}")
         return dubbed_video
 
-    bg_vol = TTS_BG_VOLUME
+    bg_vol = config.TTS_BG_VOLUME
     print(f"混合音频（背景音量: {bg_vol}）...")
     cmd_mix = [
         "ffmpeg",

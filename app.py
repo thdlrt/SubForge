@@ -1,13 +1,19 @@
 """
 SubForge — Gradio Web UI
-启动方式: python app.py
+启动方式:
+  python app.py              # 默认浏览器打开
+  python app.py --window     # 独立桌面窗口（pywebview 套壳浏览器）
 """
 
-import sys
+import argparse
+import atexit
+import inspect
 import os
 import queue
+import socket
+import sys
 import threading
-import atexit
+import time
 
 # 强制 UTF-8（必须在 import auto_subtitle 之前）
 if hasattr(sys.stdout, "reconfigure"):
@@ -18,10 +24,54 @@ if hasattr(sys.stderr, "reconfigure"):
 import gradio as gr
 
 # 将项目根目录加入 path，确保能 import auto_subtitle
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _ROOT)
+
 import auto_subtitle
-from config import TTS_PROVIDER
+import config
+import settings_ui
 from cosyvoice_manager import shutdown_cosyvoice_service
+
+# 设置页 JSON 文本框等宽样式（Gradio 6+ 需传给 launch(css=...)；旧版仍放在 Blocks 上）
+_UI_CSS = """
+.aitext-json-sync textarea, .aitext-json-sync input {
+    font-family: Consolas, "Cascadia Mono", "Sarasa Mono SC", ui-monospace, monospace !important;
+    font-size: 12px !important;
+}
+"""
+_LAUNCH_ACCEPTS_CSS = "css" in inspect.signature(gr.Blocks.launch).parameters
+
+
+def _parse_launch_args():
+    p = argparse.ArgumentParser(add_help=True)
+    p.add_argument(
+        "-w",
+        "--window",
+        action="store_true",
+        help="在独立桌面窗口中打开界面（依赖 pywebview，内嵌 WebView2/CEF）",
+    )
+    p.add_argument("--host", default="127.0.0.1", help="Gradio 监听地址")
+    p.add_argument("--port", type=int, default=7860, help="Gradio 端口")
+    args, _unknown = p.parse_known_args()
+    return args
+
+
+def _pick_server_port(host: str, preferred: int, span: int = 40) -> int:
+    """若 preferred 被占用，在 [preferred, preferred+span) 内找第一个可用 TCP 端口。"""
+    probe_host = host
+    if host in ("0.0.0.0", "", "::"):
+        probe_host = "127.0.0.1"
+    for p in range(preferred, preferred + span):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind((probe_host, p))
+        except OSError:
+            continue
+        return p
+    raise RuntimeError(
+        f"在 {preferred}–{preferred + span - 1} 范围内没有可用端口，请关闭占用进程或指定 --port"
+    )
 
 atexit.register(shutdown_cosyvoice_service)
 
@@ -128,7 +178,7 @@ def _run_processing(sources, burn_subtitle, enable_dubbing, enable_enhance, enab
             import traceback
             print(f"\n\u274c 处理时发生错误：\n{traceback.format_exc()}")
         finally:
-            if TTS_PROVIDER == "cosyvoice":
+            if config.TTS_PROVIDER == "cosyvoice":
                 shutdown_cosyvoice_service()
             sys.stdout = old_stdout
             sys.stderr = old_stderr
@@ -190,90 +240,77 @@ def process_handler(urls_text, uploaded_files, burn_subtitle, enable_dubbing,
 def build_ui():
     # 检查 API Key 配置
     api_warning = ""
-    if not auto_subtitle.QWEN_API_KEY:
+    if not config.QWEN_API_KEY:
         api_warning = (
             "\n> ⚠️ **API Key 未配置**：请先复制 `config.example.json` → `config.json` 并填写 API Key，否则 AI 总结/翻译步骤会失败。"
         )
 
-    with gr.Blocks(
-        title="SubForge — AI 字幕生成",
-    ) as app:
+    blocks_kw: dict = {"title": "SubForge — AI 字幕生成"}
+    if not _LAUNCH_ACCEPTS_CSS:
+        blocks_kw["css"] = _UI_CSS
+    with gr.Blocks(**blocks_kw) as app:
         gr.Markdown(
             "# 🎬 SubForge — AI 字幕一键生成工具\n"
             "YouTube / 本地视频 → 语音识别 → AI 总结(可选) → AI 翻译 → 双语字幕压制"
             + api_warning
         )
 
-        with gr.Row():
-            # ---- 左栏：输入 ----
-            with gr.Column(scale=1):
-                urls_input = gr.Textbox(
-                    label="YouTube 链接（每行一个）",
-                    placeholder="https://www.youtube.com/watch?v=XXXXX\nhttps://youtu.be/YYYYY",
-                    lines=4,
-                )
-                file_input = gr.File(
-                    label="或上传本地视频",
-                    file_count="multiple",
-                    file_types=[".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".ts"],
-                )
+        with gr.Tabs():
+            with gr.Tab("处理"):
+                with gr.Row():
+                    # ---- 左栏：输入 ----
+                    with gr.Column(scale=1):
+                        urls_input = gr.Textbox(
+                            label="YouTube 链接（每行一个）",
+                            placeholder="https://www.youtube.com/watch?v=XXXXX\nhttps://youtu.be/YYYYY",
+                            lines=4,
+                        )
+                        file_input = gr.File(
+                            label="或上传本地视频",
+                            file_count="multiple",
+                            file_types=[".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".ts"],
+                        )
 
-                with gr.Accordion("⚙️ 处理选项", open=False):
-                    burn_sub = gr.Checkbox(label="压制硬字幕到视频", value=True)
-                    dub_check = gr.Checkbox(
-                        label="AI 中文配音（分离背景音 + 可切换 TTS 引擎）",
-                        value=True,
-                    )
-                    enhance_check = gr.Checkbox(
-                        label="AI 画质增强（仅 NVIDIA GPU，Real-ESRGAN 超分辨率）",
-                        value=False,
-                    )
-                    summary_check = gr.Checkbox(
-                        label="AI 内容概括总结（基于英文 SRT 生成中文 Markdown）",
-                        value=False,
-                    )
-                    gr.Markdown(
-                        (
-                            f"**当前 TTS**: `Qwen TTS` · 模型 `{auto_subtitle.QWEN_TTS_MODEL}` · 音色 `{auto_subtitle.QWEN_TTS_VOICE}`\n\n"
-                            if auto_subtitle.TTS_PROVIDER == "qwen"
-                            else (
-                                f"**当前 TTS**: `CosyVoice` · 音色 `{auto_subtitle.COSYVOICE_VOICE}` · 服务 `{auto_subtitle.COSYVOICE_API_URL}`\n\n"
-                                if auto_subtitle.TTS_PROVIDER == "cosyvoice"
-                                else f"**当前 TTS**: `edge-tts` · 音色 `{auto_subtitle.TTS_VOICE}`\n\n"
+                        with gr.Accordion("⚙️ 处理选项", open=False):
+                            burn_sub = gr.Checkbox(label="压制硬字幕到视频", value=True)
+                            dub_check = gr.Checkbox(
+                                label="AI 中文配音（分离背景音 + 可切换 TTS 引擎）",
+                                value=True,
                             )
-                        ) +
-                        f"**当前配置** *(来自 config.json)*\n\n"
-                        f"- 语音模型: `{auto_subtitle.WHISPER_MODEL}` · "
-                        f"语言: `{auto_subtitle.VIDEO_LANGUAGE}`\n"
-                        f"- 翻译模型: `{auto_subtitle.QWEN_MODEL}` · "
-                        f"并发: `{auto_subtitle.TRANSLATE_CONCURRENCY}`\n"
-                        f"- 断句间隙: `{auto_subtitle.SUBTITLE_MAX_GAP_MS}` ms · "
-                        f"字体: `{auto_subtitle.SUBTITLE_FONT}` {auto_subtitle.FONT_SIZE}px\n\n"
-                        f"*如需修改，请编辑项目根目录的 `config.json` 后重启*"
-                    )
+                            enhance_check = gr.Checkbox(
+                                label="AI 画质增强（仅 NVIDIA GPU，Real-ESRGAN 超分辨率）",
+                                value=False,
+                            )
+                            summary_check = gr.Checkbox(
+                                label="AI 内容概括总结（基于英文 SRT 生成中文 Markdown）",
+                                value=False,
+                            )
+                            config_hint_md = gr.Markdown(value=settings_ui.config_summary_markdown())
 
-                process_btn = gr.Button("🚀 开始处理", variant="primary", size="lg")
+                        process_btn = gr.Button("🚀 开始处理", variant="primary", size="lg")
 
-            # ---- 右栏：输出 ----
-            with gr.Column(scale=1):
-                log_output = gr.Textbox(
-                    label="📋 处理日志",
-                    lines=22,
-                    max_lines=50,
-                    interactive=False,
+                    # ---- 右栏：输出 ----
+                    with gr.Column(scale=1):
+                        log_output = gr.Textbox(
+                            label="📋 处理日志",
+                            lines=22,
+                            max_lines=50,
+                            interactive=False,
+                        )
+                        file_output = gr.File(
+                            label="📦 输出文件（点击下载）",
+                            file_count="multiple",
+                            interactive=False,
+                        )
+
+                process_btn.click(
+                    fn=process_handler,
+                    inputs=[urls_input, file_input, burn_sub, dub_check, enhance_check, summary_check],
+                    outputs=[log_output, file_output],
                 )
-                file_output = gr.File(
-                    label="📦 输出文件（点击下载）",
-                    file_count="multiple",
-                    interactive=False,
-                )
 
-        # 绑定事件
-        process_btn.click(
-            fn=process_handler,
-            inputs=[urls_input, file_input, burn_sub, dub_check, enhance_check, summary_check],
-            outputs=[log_output, file_output],
-        )
+            with gr.Tab("设置"):
+                settings_ui.build_settings_tab(config_hint_md)
 
     return app
 
@@ -281,11 +318,52 @@ def build_ui():
 # ======================== 启动 ========================
 
 if __name__ == "__main__":
+    launch_args = _parse_launch_args()
     app = build_ui()
-    app.launch(
-        server_name="127.0.0.1",
-        server_port=7860,
+    host = launch_args.host
+    port = launch_args.port
+    use_window = launch_args.window
+
+    if use_window:
+        try:
+            import webview
+        except ImportError:
+            print("未安装 pywebview，无法使用 --window。请执行: pip install pywebview")
+            sys.exit(1)
+
+    try:
+        server_port = _pick_server_port(host, port)
+    except RuntimeError as e:
+        print(e)
+        sys.exit(1)
+    if server_port != port:
+        print(f"⚠ 端口 {port} 已被占用，已改用 {server_port}（另一实例可能仍在运行）")
+
+    launch_kw = dict(
+        server_name=host,
+        server_port=server_port,
         theme=gr.themes.Soft(),
         share=False,
-        inbrowser=True,
+        inbrowser=not use_window,
+        prevent_thread_lock=use_window,
     )
+    if _LAUNCH_ACCEPTS_CSS:
+        launch_kw["css"] = _UI_CSS
+
+    app.launch(**launch_kw)
+
+    actual_port = int(getattr(app, "server_port", None) or server_port)
+
+    if use_window:
+        # 等服务线程就绪后再打开窗口，避免白屏
+        time.sleep(0.8)
+        connect_host = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
+        url = f"http://{connect_host}:{actual_port}"
+        webview.create_window(
+            "SubForge — AI 字幕生成",
+            url,
+            width=1280,
+            height=860,
+            min_size=(900, 640),
+        )
+        webview.start()
