@@ -7,6 +7,7 @@ import sys
 import os
 import queue
 import threading
+import atexit
 
 # 强制 UTF-8（必须在 import auto_subtitle 之前）
 if hasattr(sys.stdout, "reconfigure"):
@@ -19,6 +20,10 @@ import gradio as gr
 # 将项目根目录加入 path，确保能 import auto_subtitle
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import auto_subtitle
+from config import TTS_PROVIDER
+from cosyvoice_manager import shutdown_cosyvoice_service
+
+atexit.register(shutdown_cosyvoice_service)
 
 
 # ======================== 日志捕获 ========================
@@ -33,7 +38,7 @@ class _TeeStream:
 
     def write(self, msg):
         self.original.write(msg)
-        if msg.strip():
+        if msg.strip() and "[TTS进度]" not in msg:
             self.queue.put(msg.rstrip("\n"))
 
     def flush(self):
@@ -123,6 +128,8 @@ def _run_processing(sources, burn_subtitle, enable_dubbing, enable_enhance, enab
             import traceback
             print(f"\n\u274c 处理时发生错误：\n{traceback.format_exc()}")
         finally:
+            if TTS_PROVIDER == "cosyvoice":
+                shutdown_cosyvoice_service()
             sys.stdout = old_stdout
             sys.stderr = old_stderr
             done.set()
@@ -229,7 +236,11 @@ def build_ui():
                         (
                             f"**当前 TTS**: `Qwen TTS` · 模型 `{auto_subtitle.QWEN_TTS_MODEL}` · 音色 `{auto_subtitle.QWEN_TTS_VOICE}`\n\n"
                             if auto_subtitle.TTS_PROVIDER == "qwen"
-                            else f"**当前 TTS**: `edge-tts` · 音色 `{auto_subtitle.TTS_VOICE}`\n\n"
+                            else (
+                                f"**当前 TTS**: `CosyVoice` · 音色 `{auto_subtitle.COSYVOICE_VOICE}` · 服务 `{auto_subtitle.COSYVOICE_API_URL}`\n\n"
+                                if auto_subtitle.TTS_PROVIDER == "cosyvoice"
+                                else f"**当前 TTS**: `edge-tts` · 音色 `{auto_subtitle.TTS_VOICE}`\n\n"
+                            )
                         ) +
                         f"**当前配置** *(来自 config.json)*\n\n"
                         f"- 语音模型: `{auto_subtitle.WHISPER_MODEL}` · "

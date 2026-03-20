@@ -15,9 +15,13 @@ import srt
 
 from config import (
     API_RETRY, API_SLEEP,
+    COSYVOICE_API_URL, COSYVOICE_MODE, COSYVOICE_MERGE_MAX_CHARS, COSYVOICE_PROMPT_AUDIO_PATH,
+    COSYVOICE_PROMPT_TEXT, COSYVOICE_REQUEST_TIMEOUT, COSYVOICE_VOICE,
     QWEN_TTS_API_KEY, QWEN_TTS_BASE_URL, QWEN_TTS_MODEL, QWEN_TTS_VOICE,
     TTS_PROVIDER, TTS_VOICE, TTS_RATE, TTS_VOLUME, TTS_BG_VOLUME, TTS_MAX_SPEED,
+    TTS_MERGE_GAP_MS, TTS_MERGE_MAX_CHARS,
 )
+from cosyvoice_manager import ensure_cosyvoice_service
 
 
 # ---------------------------------------------------------------------------
@@ -122,27 +126,148 @@ def _qwen_tts_download(text, out_file):
             f.write(audio_resp.read())
 
 
+def _cosyvoice_tts_download(text, out_file):
+    payload = {
+        "text": " ".join(text.splitlines()).strip(),
+        "mode": (COSYVOICE_MODE or "preset").strip().lower(),
+        "voice": COSYVOICE_VOICE,
+        "prompt_audio_path": COSYVOICE_PROMPT_AUDIO_PATH,
+        "prompt_text": COSYVOICE_PROMPT_TEXT,
+    }
+    req = urllib.request.Request(
+        f"{COSYVOICE_API_URL.rstrip('/')}/tts",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=float(COSYVOICE_REQUEST_TIMEOUT)) as resp:
+            audio_bytes = resp.read()
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"CosyVoice 请求失败: {detail or exc}") from exc
+
+    with open(out_file, "wb") as f:
+        f.write(audio_bytes)
+
+
+def _emit_tts_progress(current, total, phase, detail=""):
+    current = max(int(current), 0)
+    total = max(int(total), 1)
+    percent = min(max(int(current * 100 / total), 0), 100)
+    phase_label = {
+        "generate": "生成",
+        "stitch": "拼接",
+        "done": "完成",
+    }.get(phase, phase)
+    message = f"[TTS进度][{phase_label}] {current}/{total} ({percent}%)"
+    if detail:
+        message += f" - {detail}"
+    print(message)
+
+
+def _subtitle_text(sub):
+    return " ".join(part.strip() for part in sub.content.splitlines() if part.strip()).strip()
+
+
+def _build_tts_units(subs, merge_max_chars: int | None = None):
+    if not subs:
+        return []
+
+    units = []
+    current = None
+    max_gap_ms = max(int(TTS_MERGE_GAP_MS), 0)
+    max_chars = max(int(merge_max_chars if merge_max_chars is not None else TTS_MERGE_MAX_CHARS), 1)
+
+    for idx, sub in enumerate(subs):
+        text = _subtitle_text(sub)
+        if not text:
+            continue
+        start_ms = int(sub.start.total_seconds() * 1000)
+        end_ms = int(sub.end.total_seconds() * 1000)
+
+        if current is None:
+            current = {
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "texts": [text],
+                "source_indices": [idx],
+            }
+            continue
+
+        gap_ms = start_ms - current["end_ms"]
+        candidate_text = "，".join(current["texts"] + [text])
+        if gap_ms <= max_gap_ms and len(candidate_text) <= max_chars:
+            current["texts"].append(text)
+            current["end_ms"] = end_ms
+            current["source_indices"].append(idx)
+        else:
+            units.append(current)
+            current = {
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "texts": [text],
+                "source_indices": [idx],
+            }
+
+    if current is not None:
+        units.append(current)
+
+    for unit in units:
+        unit["text"] = "，".join(unit["texts"])
+    return units
+
+
 def step6_tts_generate(zh_srt_path, video_path):
     """为中文字幕生成语音，支持 edge-tts / qwen tts。"""
     print("\n" + "=" * 60)
     provider = (TTS_PROVIDER or "edge").strip().lower()
-    provider_label = "Qwen TTS" if provider == "qwen" else "edge-tts"
+    provider_label = {
+        "qwen": "Qwen TTS",
+        "cosyvoice": "CosyVoice",
+    }.get(provider, "edge-tts")
     print(f"🗣️  第六步：AI 语音合成（{provider_label}）...")
     print("=" * 60)
 
     from pydub import AudioSegment
     if provider == "edge":
         import edge_tts
+    elif provider == "cosyvoice":
+        print("检查并自动拉起 CosyVoice 本地服务...")
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+        ensure_cosyvoice_service()
 
     base = video_path.rsplit(".", 1)[0]
     tts_output = base + "_tts.wav"
     if os.path.exists(tts_output):
+        _emit_tts_progress(1, 1, "done", "已复用现有 TTS 音频")
         print(f"⏭️  TTS 语音已存在，跳过: {tts_output}")
         return tts_output
 
     # 读取中文字幕
     with open(zh_srt_path, encoding="utf-8") as f:
         zh_subs = list(srt.parse(f.read()))
+    merge_max = max(int(TTS_MERGE_MAX_CHARS), 1)
+    if provider == "cosyvoice" and int(COSYVOICE_MERGE_MAX_CHARS) > 0:
+        merge_max = min(merge_max, int(COSYVOICE_MERGE_MAX_CHARS))
+    synth_units = _build_tts_units(zh_subs, merge_max_chars=merge_max)
+    if not synth_units:
+        raise RuntimeError("中文字幕为空，无法生成 TTS")
+    print(
+        f"TTS 分组优化：原字幕 {len(zh_subs)} 条 -> 合成分组 {len(synth_units)} 组 "
+        f"(merge_gap_ms={TTS_MERGE_GAP_MS}, merge_max_chars={merge_max})"
+    )
+    if provider == "cosyvoice":
+        print(
+            "提示：CosyVoice 本地 GPU 推理不宜并发多路 /tts（易显存暴涨、前几段快后面像卡死）。"
+            "当前按组合并后串行请求服务。"
+        )
 
     # 获取视频总时长（毫秒）
     probe_cmd = [
@@ -165,17 +290,19 @@ def step6_tts_generate(zh_srt_path, video_path):
     os.makedirs(tts_tmp_dir, exist_ok=True)
 
     # ---- 异步 TTS 生成 ------------------------------------------------
-    semaphore = asyncio.Semaphore(4 if provider == "qwen" else 12)
+    total_units = max(len(synth_units), 1)
+    _emit_tts_progress(0, total_units, "generate", f"准备生成 {len(synth_units)} 组语音")
+    semaphore = asyncio.Semaphore(1 if provider == "cosyvoice" else (4 if provider == "qwen" else 12))
 
-    async def _generate_one(sub, idx, max_retries=max(int(API_RETRY), 1)):
-        text = sub.content.strip()
+    async def _generate_one(unit, idx, max_retries=max(int(API_RETRY), 1)):
+        text = unit["text"].strip()
         if not text:
-            return None
-        ext = "wav" if provider == "qwen" else "mp3"
+            return idx, None
+        ext = "wav" if provider in {"qwen", "cosyvoice"} else "mp3"
         out_file = os.path.join(tts_tmp_dir, f"{idx:04d}.{ext}")
         if os.path.exists(out_file):
             if os.path.getsize(out_file) >= 256:
-                return out_file
+                return idx, out_file
             os.remove(out_file)
         for attempt in range(1, max_retries + 1):
             try:
@@ -184,13 +311,15 @@ def step6_tts_generate(zh_srt_path, video_path):
                         if not QWEN_TTS_API_KEY:
                             raise RuntimeError("未配置 qwen_tts_api_key")
                         await asyncio.to_thread(_qwen_tts_download, text, out_file)
+                    elif provider == "cosyvoice":
+                        await asyncio.to_thread(_cosyvoice_tts_download, text, out_file)
                     else:
                         communicate = edge_tts.Communicate(
                             text=text, voice=TTS_VOICE, rate=TTS_RATE, volume=TTS_VOLUME,
                         )
                         await communicate.save(out_file)
                 if os.path.exists(out_file) and os.path.getsize(out_file) >= 256:
-                    return out_file
+                    return idx, out_file
                 if os.path.exists(out_file):
                     os.remove(out_file)
             except Exception as e:
@@ -200,43 +329,71 @@ def step6_tts_generate(zh_srt_path, video_path):
                     await asyncio.sleep(max(float(API_SLEEP), 0.5) * attempt)
                 else:
                     print(f"  ⚠️  TTS 第 {idx} 条生成失败（已重试 {max_retries} 次）: {e}")
-        return None
+        return idx, None
 
     async def _generate_all():
-        return await asyncio.gather(*[_generate_one(sub, i) for i, sub in enumerate(zh_subs)])
+        results = [None] * len(synth_units)
+        # CosyVoice：严格串行，避免多请求抢同一块 GPU + 模型内部状态，造成「前几段快、后面卡死」
+        if provider == "cosyvoice":
+            for i, unit in enumerate(synth_units):
+                idx, out_file = await _generate_one(unit, i)
+                results[idx] = out_file
+                _emit_tts_progress(i + 1, total_units, "generate", f"已生成 {i + 1}/{len(synth_units)} 组")
+            return results
+        tasks = [asyncio.create_task(_generate_one(unit, i)) for i, unit in enumerate(synth_units)]
+        completed = 0
+        for task in asyncio.as_completed(tasks):
+            idx, out_file = await task
+            results[idx] = out_file
+            completed += 1
+            _emit_tts_progress(completed, total_units, "generate", f"已生成 {completed}/{len(synth_units)} 组")
+        return results
 
-    active_voice = QWEN_TTS_VOICE if provider == "qwen" else TTS_VOICE
-    print(f"生成 {len(zh_subs)} 条 TTS 语音（provider={provider}, voice={active_voice}）...")
+    if provider == "qwen":
+        active_voice = QWEN_TTS_VOICE
+    elif provider == "cosyvoice":
+        active_voice = (
+            f"{COSYVOICE_MODE}:{os.path.basename(COSYVOICE_PROMPT_AUDIO_PATH) or COSYVOICE_VOICE}"
+            if (COSYVOICE_MODE or "preset").strip().lower() != "preset"
+            else COSYVOICE_VOICE
+        )
+    else:
+        active_voice = TTS_VOICE
+    print(f"生成 {len(synth_units)} 组 TTS 语音（provider={provider}, voice={active_voice}）...")
     tts_files = asyncio.run(_generate_all())
 
-    async def _retry_one(sub, idx):
-        return await _generate_one(sub, idx, max_retries=max(int(API_RETRY), 1))
+    async def _retry_one(unit, idx):
+        return await _generate_one(unit, idx, max_retries=max(int(API_RETRY), 1))
 
     # ---- 拼接到时间轴 --------------------------------------------------
 
     print("拼接 TTS 音频到时间轴...")
     failed_count = 0
-    for i, (sub, tts_file) in enumerate(zip(zh_subs, tts_files)):
+    _emit_tts_progress(0, total_units, "stitch", f"开始拼接 {len(synth_units)} 组语音")
+    for i, (unit, tts_file) in enumerate(zip(synth_units, tts_files)):
         if tts_file is None or not os.path.exists(tts_file):
+            _emit_tts_progress(i + 1, total_units, "stitch", f"已拼接 {i + 1}/{len(synth_units)} 组")
             continue
         try:
             clip = AudioSegment.from_file(tts_file)
         except Exception:
             print(f"  🔄 第 {i} 条 TTS 解码失败，重新生成...")
             os.remove(tts_file)
-            retry_file = asyncio.run(_retry_one(zh_subs[i], i))
+            retry_file = asyncio.run(_retry_one(synth_units[i], i))
             if retry_file is None:
                 failed_count += 1
+                _emit_tts_progress(i + 1, total_units, "stitch", f"已拼接 {i + 1}/{len(synth_units)} 组")
                 continue
             try:
                 clip = AudioSegment.from_file(retry_file)
             except Exception:
                 failed_count += 1
                 print(f"  ⚠️  第 {i} 条重试后仍无法解码，跳过")
+                _emit_tts_progress(i + 1, total_units, "stitch", f"已拼接 {i + 1}/{len(synth_units)} 组")
                 continue
 
-        start_ms = int(sub.start.total_seconds() * 1000)
-        end_ms = int(sub.end.total_seconds() * 1000)
+        start_ms = unit["start_ms"]
+        end_ms = unit["end_ms"]
         available_ms = end_ms - start_ms
 
         if len(clip) > available_ms and available_ms > 0:
@@ -251,9 +408,10 @@ def step6_tts_generate(zh_srt_path, video_path):
             clip = AudioSegment.from_file(sped_file)
 
         silence = silence.overlay(clip, position=start_ms)
+        _emit_tts_progress(i + 1, total_units, "stitch", f"已拼接 {i + 1}/{len(synth_units)} 组")
 
         if (i + 1) % 20 == 0:
-            print(f"  已拼接 {i + 1}/{len(zh_subs)} 条...")
+            print(f"  已拼接 {i + 1}/{len(synth_units)} 组...")
 
     if failed_count > 0:
         print(f"  ⚠️  共 {failed_count} 条 TTS 生成失败，对应位置将静音")
@@ -261,6 +419,7 @@ def step6_tts_generate(zh_srt_path, video_path):
     silence.export(tts_output, format="wav")
     shutil.rmtree(tts_tmp_dir, ignore_errors=True)
 
+    _emit_tts_progress(total_units, total_units, "done", "TTS 语音生成完成")
     print(f"✅ TTS 语音已生成: {tts_output}")
     return tts_output
 

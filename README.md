@@ -12,7 +12,7 @@ YouTube / 本地视频 → 语音识别 → AI 概括总结（可选）→ AI �
 - **AI 内容总结（可选）** — 基于英文 `.srt` 字幕调用大模型生成中文专业总结，输出 Markdown 文档
 - **双语字幕** — 自动生成 英文 / 中文 / 双语 三份 `.srt` 字幕文件
 - **硬字幕压制** — 通过 ffmpeg 将双语字幕烧录进视频，可直接上传 B 站
-- **AI 中文配音** — 使用 [demucs](https://github.com/facebookresearch/demucs) 分离背景音 + [edge-tts](https://github.com/rany2/edge-tts) 合成中文语音，自动混合为配音视频
+- **AI 中文配音** — 使用 [demucs](https://github.com/facebookresearch/demucs) 分离背景音；TTS 可选 [edge-tts](https://github.com/rany2/edge-tts)、阿里云 **Qwen TTS**（DashScope）或本地 **CosyVoice**，自动混合为配音视频
 - **AI 画质增强** — 基于 [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) 超分辨率，将视频放大至最高 4K，GPU 加速，自动限制输出不超过 4K 分辨率
 - **Web UI** — 基于 Gradio 的可视化界面，拖拽上传 / 粘贴链接即可，实时查看处理日志
 
@@ -238,15 +238,63 @@ output/
 | `subtitle_shadow` | `0` | `0`=关闭 / `1`=轻阴影 / `2`=重阴影 | 阴影偏移距离 |
 | `subtitle_margin_v` | `30` | 10~80 | 字幕距视频底部距离（像素），越大越高 |
 
-### AI 配音
+### AI 配音与 TTS 引擎
+
+在 `config.json` 中通过 **`tts_provider`** 选择引擎：
+
+| 取值 | 说明 |
+|------|------|
+| `edge` | 默认。无需额外密钥，使用微软 Edge 在线 TTS（[语音列表](https://github.com/rany2/edge-tts#voices)） |
+| `qwen_tts` | 阿里云 DashScope 多模态 TTS，需配置 `qwen_tts_api_key` 等 |
+| `cosyvoice` | 本地 [CosyVoice](https://github.com/FunAudioLLM/CosyVoice)，首次使用会在 `cosyvoice_local/` 自动创建独立环境并下载模型（详见该目录下说明） |
+
+**字幕合并（影响每条 TTS 的文本长度）**：`tts_merge_gap_ms`、`tts_merge_max_chars` 对 edge / qwen_tts 生效；使用 CosyVoice 时额外可用 `cosyvoice_merge_max_chars`。合并越激进，请求次数越少，但单条越长越容易超时或显存压力变大。
+
+**CosyVoice 模式 `cosyvoice_mode`**：`preset`（预设说话人 + `cosyvoice_voice`）、`zero_shot`（参考音频 + 参考文案）、`cross_lingual`（跨语种，依服务端实现而定）。`zero_shot` 需填写 `cosyvoice_prompt_audio_path` 与 `cosyvoice_prompt_text`。可用项目根目录脚本 **`python generate_qwen_reference.py`**（需已配置 Qwen TTS）生成与 Cherry 等音色一致的参考 WAV，并自动生成同内容的 `.txt` 供 prompt 使用。
+
+**性能提示**：CosyVoice 服务端按设计**同一时间只处理一路合成**（避免 OOM）；`cosyvoice_fp16` 默认开启以降低显存占用。修改 `cosyvoice_device` 或与模型相关的配置后，需重启本地 CosyVoice 服务（关闭应用后重开，或自行结束对应进程）。
+
+#### 通用与 edge-tts
 
 | 参数 | 默认值 | 可选值 | 说明 |
 |------|--------|--------|------|
-| `tts_voice` | `"zh-CN-YunjianNeural"` | 参见 [edge-tts 语音列表](https://github.com/rany2/edge-tts#voices) | TTS 语音角色，推荐：`zh-CN-YunxiNeural`（年轻男声）、`zh-CN-XiaoxiaoNeural`（女声） |
+| `tts_provider` | `"edge"` | `edge` / `qwen_tts` / `cosyvoice` | 配音引擎 |
+| `tts_merge_gap_ms` | `280` | — | 相邻字幕若间隔小于此值（毫秒）可合并为一条 TTS |
+| `tts_merge_max_chars` | `90` | — | 合并后单条字幕最大字符数（edge / qwen_tts 路径） |
+| `tts_voice` | `"zh-CN-YunjianNeural"` | 参见 edge-tts 文档 | **edge** 下的发音人 |
 | `tts_rate` | `"+0%"` | `-50%` ~ `+100%` | TTS 基础语速调整 |
 | `tts_volume` | `"+0%"` | `-50%` ~ `+50%` | TTS 音量调整 |
 | `tts_bg_volume` | `0.5` | 0.0~1.0 | 背景音混合音量（0=静音，1=原音量） |
-| `tts_max_speed` | `1.5` | 1.0~2.0 | TTS 最大加速倍率。当合成语音比字幕时间长时会加速适配，此值限制最大加速，避免语速过快听不清。设为 `1.0` 则完全不加速 |
+| `tts_max_speed` | `1.5` | 1.0~2.0 | 合成语音长于画面对白时段时的最大加速倍率；`1.0` 表示不加速 |
+
+#### Qwen TTS（`tts_provider`: `qwen_tts`）
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `qwen_tts_api_key` | `""` | DashScope API Key（必填） |
+| `qwen_tts_base_url` | 官方地址 | 一般无需修改 |
+| `qwen_tts_model` | `qwen3-tts-flash` | 模型名 |
+| `qwen_tts_voice` | `Cherry` | 音色名（以 DashScope 文档为准） |
+
+#### CosyVoice 本地服务（`tts_provider`: `cosyvoice`）
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `cosyvoice_api_url` | `http://127.0.0.1:9880` | HTTP 服务地址 |
+| `cosyvoice_port` | `9880` | 与 URL 端口一致即可 |
+| `cosyvoice_mode` | `preset` | `preset` / `zero_shot` / `cross_lingual` |
+| `cosyvoice_voice` | `中文男` | **preset** 模式下的预设说话人名称 |
+| `cosyvoice_prompt_audio_path` | `""` | **zero_shot** 等模式下参考音频路径 |
+| `cosyvoice_prompt_text` | `""` | 与参考音频对应的文案 |
+| `cosyvoice_device` | `cpu` | 推理设备：`cpu` / `cuda` / `auto`（bootstrap 会据环境选择 PyTorch CUDA/CPU 包） |
+| `cosyvoice_repo_url` | 官方 Git | CosyVoice 仓库地址 |
+| `cosyvoice_model_id` | `FunAudioLLM/CosyVoice-300M-SFT` | 预训练模型 ID |
+| `cosyvoice_ttsfrd_id` | `FunAudioLLM/CosyVoice-ttsfrd` | ttsfrd 资源 ID |
+| `cosyvoice_model_source` | `auto` | 模型下载源 |
+| `cosyvoice_start_timeout` | `900` | 首次拉起服务等待就绪的超时（秒） |
+| `cosyvoice_request_timeout` | `180` | 单次合成 HTTP 超时（秒） |
+| `cosyvoice_merge_max_chars` | `72` | CosyVoice 路径下合并单条最大字符数 |
+| `cosyvoice_fp16` | `true` | GPU 上是否使用半精度以省显存 |
 
 ### AI 画质增强
 
@@ -317,7 +365,19 @@ YouTube 对部分 IP 或视频启用 bot 检测，yt-dlp 会报错 `Sign in to c
 ### 配音语速过快
 
 - 降低 `tts_max_speed`（如设为 `1.2` 甚至 `1.0`）
-- 调整 `tts_rate` 为负值（如 `"-10%"`）减慢 TTS 基础语速
+- 使用 **edge** 时可将 `tts_rate` 调为负值（如 `"-10%"`）减慢基础语速
+
+### CosyVoice 首次很慢或占用空间大
+
+- 第一次选择 `cosyvoice` 时会克隆仓库、安装独立 venv、下载 SFT 模型与 ttsfrd 资源，耗时与磁盘占用都较大，属正常现象
+- 日志在 `cosyvoice_local/logs/server.log`；若长期无响应可适当增大 `cosyvoice_start_timeout`
+- NVIDIA 新卡（如需 CUDA 12.8 的驱动环境）由 `cosyvoice_local/bootstrap.py` 安装匹配的 PyTorch cu128 轮子；仅 CPU 则安装 CPU 版 PyTorch，速度较慢
+
+### CosyVoice 显存不足或合成卡住
+
+- 保持 `cosyvoice_fp16: true`，并避免在合成进行时并行多个任务
+- 适当减小 `cosyvoice_merge_max_chars` 或 `tts_merge_max_chars`，缩短单次送入模型的文本
+- 可在系统环境变量中设置 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` 缓解碎片化（依 PyTorch 版本而定）
 
 ### 画质增强速度慢
 
@@ -341,19 +401,24 @@ Copy-Item "$env:CONDA_PREFIX\..\..\Library\bin\liblzma.dll" "$env:CONDA_PREFIX\L
 
 ```
 SubForge/
-├── auto_subtitle.py       # 核心处理脚本（7 步流水线）
-├── app.py                 # Gradio Web UI
-├── _run_demucs.py         # demucs 包装脚本（绕过 torchcodec）
-├── config.json            # 本地配置（不上传，含 API Key）
-├── config.example.json    # 配置模板
-├── requirements.txt       # 主依赖
-├── requirements.cpu.txt   # CPU 版 torch 依赖
-├── requirements.cuda124.txt # CUDA 12.4 版 torch 依赖
-├── environment.yml        # conda 一键建环境
-├── .gitignore
-├── README.md
-├── input/                 # 本地视频输入目录
-└── output/                # 处理结果输出目录
+├── auto_subtitle.py          # 核心处理脚本（多步流水线入口）
+├── app.py                    # Gradio Web UI
+├── config.py                 # 读取 config.json 的运行时常量
+├── config.example.json       # 配置模板（复制为 config.json）
+├── config.json               # 本地配置（已被 .gitignore 忽略）
+├── utils.py                  # 通用工具
+├── cosyvoice_manager.py      # CosyVoice 本地服务拉起与健康检查
+├── generate_qwen_reference.py # 用 Qwen TTS 生成本地参考音色 WAV/TXT（供 CosyVoice zero_shot）
+├── _run_demucs.py            # demucs 子进程包装（绕过 torchcodec）
+├── _run_whisper.py           # Whisper 子进程包装
+├── steps/                    # 各步骤实现（下载、转写、翻译、烧录、配音、增强等）
+├── cosyvoice_local/          # CosyVoice 独立环境、vendor、模型（大部份在 .gitignore）
+├── requirements.txt          # 主依赖（不含 torch 三件套）
+├── requirements.cpu.txt      # CPU 版 torch
+├── requirements.cuda124.txt  # CUDA 12.4 版 torch（主项目推荐）
+├── environment.yml           # conda 一键建环境
+├── input/                    # 本地视频输入（默认忽略）
+└── output/                   # 处理结果输出（默认忽略）
 ```
 
 ## License

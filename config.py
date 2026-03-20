@@ -39,10 +39,27 @@ def _load_config():
         "tts_volume": "+0%",
         "tts_bg_volume": 0.5,
         "tts_max_speed": 1.5,
+        "tts_merge_gap_ms": 280,
+        "tts_merge_max_chars": 90,
         "qwen_tts_api_key": "",
         "qwen_tts_base_url": "https://dashscope.aliyuncs.com/api/v1",
         "qwen_tts_model": "qwen3-tts-flash",
         "qwen_tts_voice": "Cherry",
+        "cosyvoice_api_url": "http://127.0.0.1:9880",
+        "cosyvoice_port": 9880,
+        "cosyvoice_mode": "preset",
+        "cosyvoice_voice": "中文男",
+        "cosyvoice_prompt_audio_path": "",
+        "cosyvoice_prompt_text": "",
+        "cosyvoice_device": "cpu",
+        "cosyvoice_repo_url": "https://github.com/FunAudioLLM/CosyVoice.git",
+        "cosyvoice_model_id": "FunAudioLLM/CosyVoice-300M-SFT",
+        "cosyvoice_ttsfrd_id": "FunAudioLLM/CosyVoice-ttsfrd",
+        "cosyvoice_model_source": "auto",
+        "cosyvoice_start_timeout": 900,
+        "cosyvoice_request_timeout": 180,
+        "cosyvoice_merge_max_chars": 72,
+        "cosyvoice_fp16": True,
         "enhance_model": "RealESRGAN_x4plus",
         "enhance_outscale": 4,
     }
@@ -138,10 +155,27 @@ TTS_RATE               = _cfg["tts_rate"]
 TTS_VOLUME             = _cfg["tts_volume"]
 TTS_BG_VOLUME          = _cfg["tts_bg_volume"]
 TTS_MAX_SPEED          = _cfg["tts_max_speed"]
+TTS_MERGE_GAP_MS       = _cfg["tts_merge_gap_ms"]
+TTS_MERGE_MAX_CHARS    = _cfg["tts_merge_max_chars"]
 QWEN_TTS_API_KEY       = _cfg["qwen_tts_api_key"]
 QWEN_TTS_BASE_URL      = _cfg["qwen_tts_base_url"]
 QWEN_TTS_MODEL         = _cfg["qwen_tts_model"]
 QWEN_TTS_VOICE         = _cfg["qwen_tts_voice"]
+COSYVOICE_API_URL      = _cfg["cosyvoice_api_url"]
+COSYVOICE_PORT         = _cfg["cosyvoice_port"]
+COSYVOICE_MODE         = _cfg["cosyvoice_mode"]
+COSYVOICE_VOICE        = _cfg["cosyvoice_voice"]
+COSYVOICE_PROMPT_AUDIO_PATH = _cfg["cosyvoice_prompt_audio_path"]
+COSYVOICE_PROMPT_TEXT  = _cfg["cosyvoice_prompt_text"]
+COSYVOICE_DEVICE       = _cfg["cosyvoice_device"]
+COSYVOICE_REPO_URL     = _cfg["cosyvoice_repo_url"]
+COSYVOICE_MODEL_ID     = _cfg["cosyvoice_model_id"]
+COSYVOICE_TTSFRD_ID    = _cfg["cosyvoice_ttsfrd_id"]
+COSYVOICE_MODEL_SOURCE = _cfg["cosyvoice_model_source"]
+COSYVOICE_START_TIMEOUT = _cfg["cosyvoice_start_timeout"]
+COSYVOICE_REQUEST_TIMEOUT = _cfg["cosyvoice_request_timeout"]
+COSYVOICE_MERGE_MAX_CHARS = _cfg["cosyvoice_merge_max_chars"]
+COSYVOICE_FP16         = _cfg["cosyvoice_fp16"]
 ENHANCE_MODEL          = _cfg["enhance_model"]
 ENHANCE_OUTSCALE       = _cfg["enhance_outscale"]
 

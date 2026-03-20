@@ -1,20 +1,55 @@
-# 忽略本地配置（含 API Key，禁止上传）
+# 本地配置与敏感信息（含 API Key、cookies，禁止提交）
 config.json
 cookies.txt
+.env
+.env.local
 
-# 忽略视频输入/输出目录（文件太大）
+# 视频输入/输出（体积大）
 input/
 output/
 
-# Python 缓存
+# Python
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+dist/
+build/
+pip-wheel-metadata/
 
-# faster-whisper 模型缓存
+# 测试 / 类型检查 / 格式化缓存
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# 模型与大型缓存（Whisper 等）
 models/
 
-# 系统文件
+# CosyVoice 本地运行时（bootstrap 生成，体积大）
+cosyvoice_local/.venv/
+cosyvoice_local/vendor/
+cosyvoice_local/pretrained_models/
+cosyvoice_local/logs/
+cosyvoice_local/.install.stamp
+cosyvoice_local/server.pid
+cosyvoice_local/runtime.requirements.txt
+
+# 用 generate_qwen_reference.py 生成的参考音色（本机路径常写在 config 里）
+voice_reference_*.wav
+voice_reference_*.txt
+
+# 系统与编辑器
 .DS_Store
 Thumbs.db
+.idea/
+*.swp
+*.swo
 vscode-extensions.txt
