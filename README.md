@@ -226,7 +226,8 @@ output/
 |------|--------|--------|------|
 | `max_video_height` | `1080` | `720` / `1080` / `1440` / `2160` | YouTube 下载的最大分辨率 |
 | `ytdlp_client` | `""` | `ios` / `tv_embedded` / `web` / `""` | 模拟的 YouTube 客户端类型。`ios` 和 `tv_embedded` 有时可绕过 bot 检测；留空则使用默认 web 客户端 |
-| `ytdlp_cookies` | `""` | 文件路径或浏览器名 | cookies 配置，支持两种模式（见下方说明）：填文件路径如 `"./cookies.txt"` 使用导出的 cookies 文件；填浏览器名如 `"edge"` 直接从浏览器读取。留空则不使用 |
+| `ytdlp_cookies` | `""` | 文件路径或浏览器名 | cookies 配置，支持两种模式（见下方说明）：填文件路径如 `"./cookies.txt"` 使用导出的 cookies 文件；填浏览器名如 `"edge"` 直接从浏览器读取。留空则不使用。**当某域名未在 `ytdlp_cookies_by_host` 中命中时，会回退使用此项** |
+| `ytdlp_cookies_by_host` | `{}` | JSON 对象 | **按域名后缀**配置 Cookie：键为 hostname 后缀（如 `gamedev.tv` 会匹配 `www.gamedev.tv`），值为 cookies 文件路径或浏览器名，语义与 `ytdlp_cookies` 相同。**最长后缀优先匹配**。路径不存在时该次下载**不使用** Cookie。留空对象且全局 `ytdlp_cookies` 也为空则不带 Cookie |
 
 ### 翻译 API
 

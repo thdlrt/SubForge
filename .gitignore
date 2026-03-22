@@ -1,6 +1,7 @@
 # 本地配置与敏感信息（含 API Key、cookies，禁止提交）
 config.json
-cookies.txt
+cookies*.txt
+cookie*.txt
 .env
 .env.local
 

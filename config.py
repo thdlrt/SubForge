@@ -16,6 +16,7 @@ def _load_config():
         "video_language": None,
         "max_video_height": 1080,
         "ytdlp_cookies": "",
+        "ytdlp_cookies_by_host": {},
         "ytdlp_client": "",
         "subtitle_max_gap_ms": 2000,
         "subtitle_max_chars": 120,
@@ -147,6 +148,15 @@ def coerce_config_values(cfg: dict) -> None:
     if isinstance(vl, str) and not vl.strip():
         cfg["video_language"] = None
 
+    hm = cfg.get("ytdlp_cookies_by_host")
+    if not isinstance(hm, dict):
+        cfg["ytdlp_cookies_by_host"] = {}
+    else:
+        cfg["ytdlp_cookies_by_host"] = {
+            str(k): "" if v is None else str(v)
+            for k, v in hm.items()
+        }
+
     sa = cfg.get("subtitle_advanced")
     if not isinstance(sa, dict):
         return
@@ -180,7 +190,7 @@ def assign_from_cfg(cfg: dict) -> None:
     """用一份完整配置字典刷新本模块中的全局常量（供运行中热更新）。"""
     global _cfg, _subtitle_advanced
     global WHISPER_MODEL, DEVICE, COMPUTE_TYPE, VIDEO_LANGUAGE, MAX_VIDEO_HEIGHT
-    global YTDLP_COOKIES, YTDLP_CLIENT, SUBTITLE_MAX_GAP_MS, SUBTITLE_MAX_CHARS
+    global YTDLP_COOKIES, YTDLP_COOKIES_BY_HOST, YTDLP_CLIENT, SUBTITLE_MAX_GAP_MS, SUBTITLE_MAX_CHARS
     global SUBTITLE_TARGET_CHARS_RATIO, SUBTITLE_MIN_CHARS_RATIO
     global SUBTITLE_HARD_MAX_CHARS_RATIO, SUBTITLE_HARD_MAX_CHARS_BIAS
     global SUBTITLE_SOFT_MAX_DURATION_SEC, SUBTITLE_HARD_MAX_DURATION_SEC
@@ -211,6 +221,7 @@ def assign_from_cfg(cfg: dict) -> None:
     VIDEO_LANGUAGE = cfg["video_language"]
     MAX_VIDEO_HEIGHT = cfg["max_video_height"]
     YTDLP_COOKIES = cfg["ytdlp_cookies"]
+    YTDLP_COOKIES_BY_HOST = cfg["ytdlp_cookies_by_host"]
     YTDLP_CLIENT = cfg["ytdlp_client"]
     SUBTITLE_MAX_GAP_MS = cfg["subtitle_max_gap_ms"]
     SUBTITLE_MAX_CHARS = cfg["subtitle_max_chars"]

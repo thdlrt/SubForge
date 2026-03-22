@@ -71,6 +71,15 @@ def _coerce_field(path: str, kind: str, raw: Any) -> Any:
         return bool(raw)
     if kind == "dropdown":
         return raw
+    if kind == "json_dict":
+        if raw is None:
+            return {}
+        if isinstance(raw, dict):
+            return raw
+        s = str(raw).strip()
+        if not s:
+            return {}
+        return json.loads(s)
     return raw
 
 
@@ -87,6 +96,9 @@ def _format_for_widget(path: str, kind: str, val: Any) -> Any:
         return float(val) if val is not None else 0.0
     if kind == "dropdown":
         return val
+    if kind == "json_dict":
+        d = val if isinstance(val, dict) else {}
+        return json.dumps(d, indent=2, ensure_ascii=False)
     return str(val) if val is not None else ""
 
 
@@ -123,7 +135,13 @@ FIELD_GROUPS: list[tuple[str, list[dict]]] = [
     (
         "下载 (yt-dlp)",
         [
-            _field("ytdlp_cookies", "str", "Cookies（文件路径或浏览器名）"),
+            _field("ytdlp_cookies", "str", "Cookies（文件路径或浏览器名，未命中域名映射时用）"),
+            _field(
+                "ytdlp_cookies_by_host",
+                "json_dict",
+                "按域名 Cookies（JSON：键为后缀如 gamedev.tv，值为路径或浏览器名）",
+                lines=6,
+            ),
             _field("ytdlp_client", "str", "YouTube 客户端（ios/tv_embedded/web，留空默认）"),
         ],
     ),
@@ -252,6 +270,12 @@ def _make_widget(spec: dict, cfg: dict):
         ch = spec["choices"] or []
         v = fv if fv in ch else ch[0]
         return gr.Dropdown(label=label, choices=ch, value=v)
+    if kind == "json_dict":
+        return gr.Textbox(
+            label=label,
+            value=str(fv),
+            lines=spec.get("lines", 6),
+        )
     if kind in ("str", "optional_lang"):
         return gr.Textbox(label=label, value=str(fv), lines=spec.get("lines", 1))
     if kind == "password":
