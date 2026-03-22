@@ -137,10 +137,11 @@ def _process_prepared(prepared, burn_subtitle=True, enable_dubbing=False,
 
 
 def process_one(source, burn_subtitle=True, enable_dubbing=False,
-                enable_enhance=False, enable_summary=False):
+                enable_enhance=False, enable_summary=False,
+                translate_video_name=False):
     """处理单个视频源（本地文件或 YouTube 链接）。
     组合 _prepare_source + _process_prepared，保持向后兼容。"""
-    prepared = _prepare_source(source)
+    prepared = _prepare_source(source, translate_video_name=translate_video_name)
     return _process_prepared(prepared, burn_subtitle=burn_subtitle,
                              enable_dubbing=enable_dubbing, enable_enhance=enable_enhance,
                              enable_summary=enable_summary)

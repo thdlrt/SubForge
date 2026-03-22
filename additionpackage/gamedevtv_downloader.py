@@ -165,8 +165,11 @@ class GameDevDownloader:
 
     def build_output_path(self, course_title: str, lecture: LectureItem) -> Path:
         course_dir = self.output_dir / sanitize_name(course_title)
-        section_dir = course_dir / f"{lecture.section_index:02d} {sanitize_name(lecture.section_title)}"
-        filename = f"{lecture.lecture_index:02d} {sanitize_name(lecture.lecture_title)}.mp4"
+        section_dir = course_dir / f"{lecture.section_index} {sanitize_name(lecture.section_title)}"
+        filename = (
+            f"{lecture.section_index}.{lecture.lecture_index} "
+            f"{sanitize_name(lecture.lecture_title)}.mp4"
+        )
         return section_dir / filename
 
     @staticmethod
@@ -252,7 +255,7 @@ def main() -> None:
     if args.list_only:
         for lec in lectures:
             print(
-                f"[{lec.section_index:02d}.{lec.lecture_index:02d}] "
+                f"[{lec.section_index}.{lec.lecture_index}] "
                 f"{lec.section_title} / {lec.lecture_title} -> {lec.relative_url}"
             )
         return

@@ -9,6 +9,7 @@ import argparse
 import atexit
 import inspect
 import os
+from pathlib import Path
 import queue
 import socket
 import sys
@@ -103,11 +104,48 @@ class _TeeStream:
 
 # 全局锁：同一时间只允许一个处理任务
 _processing_lock = threading.Lock()
+_VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".ts"}
+
+
+def process_all_input_handler(
+    burn_subtitle,
+    enable_dubbing,
+    enable_enhance,
+    enable_summary,
+    translate_video_name,
+):
+    """一键处理 input 下所有本地视频。"""
+    input_root = Path("./input").resolve()
+    if not input_root.exists():
+        yield f"⚠ input 目录不存在: {input_root}", []
+        return
+    sources = sorted(
+        str(p) for p in input_root.rglob("*")
+        if p.is_file() and p.suffix.lower() in _VIDEO_EXTS
+    )
+    if not sources:
+        yield "ℹ input 下未找到可处理的视频文件。", []
+        return
+    yield from _run_processing(
+        sources,
+        burn_subtitle,
+        enable_dubbing,
+        enable_enhance,
+        enable_summary,
+        translate_video_name,
+    )
 
 
 # ======================== 处理逻辑 ========================
 
-def _run_processing(sources, burn_subtitle, enable_dubbing, enable_enhance, enable_summary):
+def _run_processing(
+    sources,
+    burn_subtitle,
+    enable_dubbing,
+    enable_enhance,
+    enable_summary,
+    translate_video_name,
+):
     """Generator: 在后台线程处理视频，实时流式输出日志"""
     log_q = queue.Queue()
     done = threading.Event()
@@ -128,6 +166,7 @@ def _run_processing(sources, burn_subtitle, enable_dubbing, enable_enhance, enab
                     enable_dubbing=enable_dubbing,
                     enable_enhance=enable_enhance,
                     enable_summary=enable_summary,
+                    translate_video_name=translate_video_name,
                 )
                 all_results.append(result)
                 if result:
@@ -146,7 +185,11 @@ def _run_processing(sources, burn_subtitle, enable_dubbing, enable_enhance, enab
                 prepared_list = []
                 for i, src in enumerate(sources, 1):
                     print(f"\n── 下载 [{i}/{total}]: {src}")
-                    prepared_list.append(auto_subtitle._prepare_source(src))
+                    prepared_list.append(
+                        auto_subtitle._prepare_source(
+                            src, translate_video_name=translate_video_name
+                        )
+                    )
 
                 dl_ok   = sum(1 for p in prepared_list if p.get("status") != "失败")
                 dl_fail = total - dl_ok
@@ -210,8 +253,15 @@ def _run_processing(sources, burn_subtitle, enable_dubbing, enable_enhance, enab
         _processing_lock.release()
 
 
-def process_handler(urls_text, uploaded_files, burn_subtitle, enable_dubbing,
-                    enable_enhance, enable_summary):
+def process_handler(
+    urls_text,
+    uploaded_files,
+    burn_subtitle,
+    enable_dubbing,
+    enable_enhance,
+    enable_summary,
+    translate_video_name,
+):
     """Gradio 入口：解析输入，启动处理"""
     sources = []
 
@@ -232,7 +282,14 @@ def process_handler(urls_text, uploaded_files, burn_subtitle, enable_dubbing,
         yield "⚠ 请输入至少一个 YouTube 链接或上传本地视频文件。", []
         return
 
-    yield from _run_processing(sources, burn_subtitle, enable_dubbing, enable_enhance, enable_summary)
+    yield from _run_processing(
+        sources,
+        burn_subtitle,
+        enable_dubbing,
+        enable_enhance,
+        enable_summary,
+        translate_video_name,
+    )
 
 
 # ======================== 构建 UI ========================
@@ -285,9 +342,18 @@ def build_ui():
                                 label="AI 内容概括总结（基于英文 SRT 生成中文 Markdown）",
                                 value=False,
                             )
+                            translate_name_check = gr.Checkbox(
+                                label="自动将视频名称翻译为中文（下载和本地视频都生效，使用 Qwen API）",
+                                value=False,
+                            )
                             config_hint_md = gr.Markdown(value=settings_ui.config_summary_markdown())
 
                         process_btn = gr.Button("🚀 开始处理", variant="primary", size="lg")
+                        process_input_btn = gr.Button(
+                            "🚀 一键处理 input 全部视频",
+                            variant="secondary",
+                            size="lg",
+                        )
 
                     # ---- 右栏：输出 ----
                     with gr.Column(scale=1):
@@ -305,7 +371,26 @@ def build_ui():
 
                 process_btn.click(
                     fn=process_handler,
-                    inputs=[urls_input, file_input, burn_sub, dub_check, enhance_check, summary_check],
+                    inputs=[
+                        urls_input,
+                        file_input,
+                        burn_sub,
+                        dub_check,
+                        enhance_check,
+                        summary_check,
+                        translate_name_check,
+                    ],
+                    outputs=[log_output, file_output],
+                )
+                process_input_btn.click(
+                    fn=process_all_input_handler,
+                    inputs=[
+                        burn_sub,
+                        dub_check,
+                        enhance_check,
+                        summary_check,
+                        translate_name_check,
+                    ],
                     outputs=[log_output, file_output],
                 )
 

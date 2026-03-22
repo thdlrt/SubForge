@@ -141,6 +141,63 @@ def _pick_downloaded_video_file(output_dir: Path) -> Path:
     raise FileNotFoundError("未找到下载的视频文件！")
 
 
+def _translate_title_with_qwen(raw_title: str) -> str:
+    """使用 Qwen 将视频标题翻译为简体中文；失败时返回原文。"""
+    text = (raw_title or "").strip()
+    if not text:
+        return text
+    if not (config.QWEN_API_KEY or "").strip():
+        print("   ⚠ 未配置 qwen_api_key，跳过中文命名")
+        return text
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=config.QWEN_API_KEY, base_url=config.QWEN_BASE_URL)
+        resp = client.chat.completions.create(
+            model=config.QWEN_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "将给定视频标题翻译成简体中文。"
+                        "只输出译文，不要解释，不要加引号。"
+                        "专有名词按中文游戏开发语境保留。"
+                    ),
+                },
+                {"role": "user", "content": text},
+            ],
+            temperature=0.1,
+            max_tokens=128,
+        )
+        zh = (resp.choices[0].message.content or "").strip()
+        if zh:
+            return zh
+    except Exception as e:
+        print(f"   WARN 中文命名翻译失败，保持原标题: {e}")
+    return text
+
+
+def _rename_video_to_zh(video_path: str) -> str:
+    """将视频文件名翻译为中文并重命名（同目录），返回新路径。"""
+    old_path = os.path.abspath(video_path)
+    if not os.path.isfile(old_path):
+        return video_path
+    stem = Path(old_path).stem
+    ext = Path(old_path).suffix
+    zh_title = sanitize_name(_translate_title_with_qwen(stem))
+    if not zh_title:
+        return video_path
+    new_path = os.path.join(os.path.dirname(old_path), zh_title + ext)
+    if os.path.abspath(new_path) == old_path:
+        return video_path
+    if os.path.exists(new_path):
+        print(f"   ⚠ 中文命名目标已存在，跳过重命名: {new_path}")
+        return video_path
+    os.rename(old_path, new_path)
+    print(f"   RENAMED 已重命名为中文标题: {os.path.basename(new_path)}")
+    return new_path
+
+
 def step1_download_video(url, output_dir):
     """使用 yt-dlp 下载视频（含 HLS 等），输出为 MP4 或无损封装为 MP4。"""
     check_gamedev_url_for_ytdlp(url)
@@ -233,7 +290,7 @@ def step1_download_video(url, output_dir):
     return str(video_path)
 
 
-def prepare_source(source):
+def prepare_source(source, translate_video_name=False):
     """第一阶段：准备视频（下载或准备本地文件），返回已准备好的视频信息字典。"""
     is_local = os.path.isfile(source)
     try:
@@ -300,6 +357,9 @@ def prepare_source(source):
                     os.rmdir(temp_dir)
                 except OSError:
                     pass
+
+        if translate_video_name and video_path and os.path.isfile(video_path):
+            video_path = _rename_video_to_zh(video_path)
 
         return {
             "source": source,
