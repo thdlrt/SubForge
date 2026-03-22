@@ -226,7 +226,7 @@ output/
 |------|--------|--------|------|
 | `max_video_height` | `1080` | `720` / `1080` / `1440` / `2160` | YouTube 下载的最大分辨率 |
 | `ytdlp_client` | `""` | `ios` / `tv_embedded` / `web` / `""` | 模拟的 YouTube 客户端类型。`ios` 和 `tv_embedded` 有时可绕过 bot 检测；留空则使用默认 web 客户端 |
-| `ytdlp_cookies` | `""` | 文件路径或浏览器名 | cookies 配置，支持两种模式（见下方说明）：填文件路径如 `"./cookies.txt"` 使用导出的 cookies 文件；填浏览器名如 `"edge"` 直接从浏览器读取。留空则不使用。**当某域名未在 `ytdlp_cookies_by_host` 中命中时，会回退使用此项** |
+| `ytdlp_cookies` | `""` | 文件路径或浏览器名 | cookies 配置，支持两种模式（见下方说明）：填文件路径如 `"./cookies/youtube.txt"`（建议放在项目下 **`cookies/`** 目录）使用导出的 cookies 文件；填浏览器名如 `"edge"` 直接从浏览器读取。留空则不使用。**当某域名未在 `ytdlp_cookies_by_host` 中命中时，会回退使用此项** |
 | `ytdlp_cookies_by_host` | `{}` | JSON 对象 | **按域名后缀**配置 Cookie：键为 hostname 后缀（如 `gamedev.tv` 会匹配 `www.gamedev.tv`），值为 cookies 文件路径或浏览器名，语义与 `ytdlp_cookies` 相同。**最长后缀优先匹配**。路径不存在时该次下载**不使用** Cookie。留空对象且全局 `ytdlp_cookies` 也为空则不带 Cookie |
 
 ### 翻译 API
@@ -345,17 +345,27 @@ YouTube 对部分 IP 或视频启用 bot 检测，yt-dlp 会报错 `Sign in to c
 1. 在 Chrome / Edge 中安装扩展 [**Get cookies.txt LOCALLY**](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)
 2. 打开 [youtube.com](https://www.youtube.com) 并**确保已登录账号**
 3. 点击扩展图标 → 选择「Export As」→「cookies.txt」
-4. 将导出的文件保存到项目目录，例如 `cookies.txt`
+4. 将导出的文件保存到项目目录 **`cookies/`** 下，例如 `cookies/youtube.txt`
 5. 在 `config.json` 中填写路径：
    ```json
-   "ytdlp_cookies": "./cookies.txt"
+   "ytdlp_cookies": "./cookies/youtube.txt"
    ```
 
 #### 注意事项
 
-- cookies 文件包含账号登录信息，**请勿分享或提交到 Git**（`config.json` 已在 `.gitignore` 中，cookies 路径只存在于本机 `config.json` 里）
+- cookies 文件包含账号登录信息，**请勿分享或提交到 Git**（`config.json` 与 `cookies/*.txt` 已在 `.gitignore` 中；`cookies/README.txt` 仅为说明可随仓库提交）
 - 导出的 cookies 文件有效期较短（通常几小时到几天），若下载再次报认证错误，重新导出一次即可。推荐使用模式一（从浏览器自动读取）以免反复导出
 - 建议创建一个专用的小号用于导出 cookies，避免主账号暴露
+
+### GameDev.tv 下载失败：`Unsupported URL` 或无法解析
+
+yt-dlp 对 GameDev.tv **只识别「学习中心」数字 ID 链接**，格式为：
+
+`https://www.gamedev.tv/dashboard/courses/<课程数字ID>/<课时数字ID>`
+
+请勿使用课程前台 slug 链接（例如 `gamedev.tv/courses/某课程/welcome-to-...`），否则会落入通用提取器并报错。请从 **My Courses / 我的课程** 进入已购课程，在**播放某一课时**时复制浏览器地址栏的 `dashboard/courses/...` 链接。
+
+需登录时请在 `ytdlp_cookies_by_host` 中为 `gamedev.tv` 配置 cookies 文件，并尽量保持 **yt-dlp 为较新版本**（`pip install -U yt-dlp`）。若仍异常，可到 [yt-dlp GameDev.tv 相关 issue](https://github.com/yt-dlp/yt-dlp/issues?q=gamedev) 查看上游是否更新提取器。
 
 ### demucs 分离音频时报 torchcodec / torchaudio 错误
 

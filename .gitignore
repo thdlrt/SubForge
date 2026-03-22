@@ -1,7 +1,12 @@
 # 本地配置与敏感信息（含 API Key、cookies，禁止提交）
 config.json
+# 根目录遗留的 cookie 导出文件
 cookies*.txt
 cookie*.txt
+# cookies 目录内仅跟踪占位说明，具体 *.txt 不提交
+cookies/*
+!cookies/.gitkeep
+!cookies/README.txt
 .env
 .env.local
 

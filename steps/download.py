@@ -26,6 +26,36 @@ def _is_youtube_hostname(hostname: str) -> bool:
     return hostname == "youtube.com" or hostname.endswith(".youtube.com")
 
 
+def _is_gamedev_hostname(hostname: str) -> bool:
+    return bool(hostname) and hostname.endswith("gamedev.tv")
+
+
+def check_gamedev_url_for_ytdlp(url: str) -> None:
+    """
+    yt-dlp 内置的 GameDevTV 提取器只支持「学习中心」数字 ID 链接：
+    https://www.gamedev.tv/dashboard/courses/<course_id>/<lecture_id>
+    课程前台 slug 页（/courses/课程名/课时名）会落入 generic 并报 Unsupported URL。
+    """
+    if not (url or "").strip():
+        return
+    p = urlparse(url.strip())
+    host = (p.hostname or "").lower()
+    if not _is_gamedev_hostname(host):
+        return
+    path = p.path or ""
+    if "/dashboard/courses/" in path:
+        return
+    if "/courses/" in path:
+        raise ValueError(
+            "GameDev.tv：当前链接是课程前台 slug 页面，yt-dlp 无法解析（会报 Unsupported URL）。\n"
+            "请从网站「My Courses / 我的课程」进入已购课程，点开某一课时的播放页，复制地址栏链接，\n"
+            "应为：\n"
+            "  https://www.gamedev.tv/dashboard/courses/课程数字ID/课时数字ID\n"
+            "不要使用 gamedev.tv/courses/课程名/课时名 这类链接。\n"
+            "并确保已配置登录 Cookie（如 ytdlp_cookies_by_host 中的 gamedev.tv）。"
+        )
+
+
 def _resolve_cookie_value_for_url(url: str) -> str:
     """按 hostname 后缀匹配 ytdlp_cookies_by_host；未命中则用全局 ytdlp_cookies。"""
     host_map = getattr(config, "YTDLP_COOKIES_BY_HOST", None) or {}
@@ -60,9 +90,12 @@ def _cookies_args_for_value(value: str) -> list:
 
 
 def _ytdlp_extra_args(url: str | None) -> list:
-    """返回 yt-dlp 的 cookie +（仅 YouTube）client 参数列表。"""
+    """返回 yt-dlp 的 cookie +（仅 YouTube）client + 站点头 等参数列表。"""
     args = []
     hostname = _hostname_from_url(url) if url else ""
+    if hostname and _is_gamedev_hostname(hostname):
+        # 部分 API/CDN 校验 Referer，与 cookies 一并提供
+        args += ["--add-header", "Referer:https://gamedev.tv/"]
     if hostname and config.YTDLP_CLIENT and _is_youtube_hostname(hostname):
         args += ["--extractor-args", f"youtube:player_client={config.YTDLP_CLIENT}"]
         print(f"   YouTube 客户端: {config.YTDLP_CLIENT}")
@@ -110,6 +143,8 @@ def _pick_downloaded_video_file(output_dir: Path) -> Path:
 
 def step1_download_video(url, output_dir):
     """使用 yt-dlp 下载视频（含 HLS 等），输出为 MP4 或无损封装为 MP4。"""
+    check_gamedev_url_for_ytdlp(url)
+
     print("\n" + "=" * 60)
     print("📥 第一步：下载视频...")
     print("=" * 60)
@@ -224,6 +259,8 @@ def prepare_source(source):
             os.makedirs(temp_dir, exist_ok=True)
 
             print(f"📥 下载视频: {url}")
+
+            check_gamedev_url_for_ytdlp(url)
 
             pre_file = None
             try:

@@ -135,7 +135,7 @@ FIELD_GROUPS: list[tuple[str, list[dict]]] = [
     (
         "下载 (yt-dlp)",
         [
-            _field("ytdlp_cookies", "str", "Cookies（文件路径或浏览器名，未命中域名映射时用）"),
+            _field("ytdlp_cookies", "str", "Cookies（如 ./cookies/youtube.txt 或浏览器名；未命中域名映射时用）"),
             _field(
                 "ytdlp_cookies_by_host",
                 "json_dict",
