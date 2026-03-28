@@ -10,10 +10,11 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 from pathlib import Path
 
 import config
+from portutil import pick_free_tcp_port
 
 
 ROOT = Path(__file__).resolve().parent
@@ -42,6 +43,24 @@ def _server_host_port() -> tuple[str, int]:
     host = parsed.hostname or "127.0.0.1"
     port = parsed.port or int(config.COSYVOICE_PORT)
     return host, port
+
+
+def _ensure_cosyvoice_listen_port() -> None:
+    """若配置端口被占用，在本进程内把 cosyvoice_api_url / cosyvoice_port 改为首个可用端口。"""
+    host, preferred = _server_host_port()
+    try:
+        chosen = pick_free_tcp_port(host, preferred)
+    except RuntimeError as e:
+        raise RuntimeError(str(e)) from e
+    if chosen == preferred:
+        return
+    parsed = urlparse(config.COSYVOICE_API_URL)
+    h = parsed.hostname or "127.0.0.1"
+    scheme = parsed.scheme or "http"
+    path = parsed.path or ""
+    config.COSYVOICE_API_URL = urlunparse((scheme, f"{h}:{chosen}", path, "", "", ""))
+    config.COSYVOICE_PORT = chosen
+    print(f"⚠ CosyVoice 端口 {preferred} 已被占用，已改用 {chosen}（本会话内配音请求将指向新端口）")
 
 
 def _spawn_server() -> None:
@@ -124,6 +143,7 @@ def ensure_cosyvoice_service() -> None:
     if _healthcheck():
         return
 
+    _ensure_cosyvoice_listen_port()
     _spawn_server()
     deadline = time.time() + max(int(config.COSYVOICE_START_TIMEOUT), 30)
     while time.time() < deadline:

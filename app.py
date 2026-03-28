@@ -11,7 +11,6 @@ import inspect
 import os
 from pathlib import Path
 import queue
-import socket
 import sys
 import threading
 import time
@@ -32,6 +31,7 @@ import auto_subtitle
 import config
 import settings_ui
 from cosyvoice_manager import shutdown_cosyvoice_service
+from portutil import pick_free_tcp_port
 
 # 设置页 JSON 文本框等宽样式（Gradio 6+ 需传给 launch(css=...)；旧版仍放在 Blocks 上）
 _UI_CSS = """
@@ -57,22 +57,17 @@ def _parse_launch_args():
     return args
 
 
-def _pick_server_port(host: str, preferred: int, span: int = 40) -> int:
-    """若 preferred 被占用，在 [preferred, preferred+span) 内找第一个可用 TCP 端口。"""
-    probe_host = host
-    if host in ("0.0.0.0", "", "::"):
-        probe_host = "127.0.0.1"
-    for p in range(preferred, preferred + span):
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                s.bind((probe_host, p))
-        except OSError:
-            continue
-        return p
-    raise RuntimeError(
-        f"在 {preferred}–{preferred + span - 1} 范围内没有可用端口，请关闭占用进程或指定 --port"
-    )
+def _ensure_localhost_no_proxy() -> None:
+    """Gradio launch 会用 httpx 访问 127.0.0.1；若系统代理未排除本机，常出现 startup-events 502。"""
+    extra = ("127.0.0.1", "localhost", "::1")
+    for key in ("NO_PROXY", "no_proxy"):
+        cur = os.environ.get(key, "")
+        parts = [p.strip() for p in cur.split(",") if p.strip()]
+        for e in extra:
+            if e not in parts:
+                parts.append(e)
+        os.environ[key] = ",".join(parts)
+
 
 atexit.register(shutdown_cosyvoice_service)
 
@@ -403,6 +398,7 @@ def build_ui():
 # ======================== 启动 ========================
 
 if __name__ == "__main__":
+    _ensure_localhost_no_proxy()
     launch_args = _parse_launch_args()
     app = build_ui()
     host = launch_args.host
@@ -417,7 +413,7 @@ if __name__ == "__main__":
             sys.exit(1)
 
     try:
-        server_port = _pick_server_port(host, port)
+        server_port = pick_free_tcp_port(host, port)
     except RuntimeError as e:
         print(e)
         sys.exit(1)

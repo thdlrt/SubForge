@@ -3,7 +3,7 @@ GameDev.tv 课程批量下载器
 
 用法示例：
   python additionpackage/gamedevtv_downloader.py ^
-    "https://gamedev.tv/courses/unreal-survival/welcome-to-the-course/7200" ^
+    "https://gamedev.tv/courses/unity-shader-graph/welcome-to-the-course/5473" ^
     --cookie "./cookies/gamedev.txt"
     --list-only 只输出课程列表
 
