@@ -227,7 +227,25 @@ def step1_download_video(url, output_dir):
     cmd += _ytdlp_extra_args(url)
     cmd.append(url)
 
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        hostname = _hostname_from_url(url)
+        if _is_youtube_hostname(hostname):
+            hint_lines = [
+                "YouTube 下载失败。",
+                "常见原因：",
+                "1) cookies 过期/不完整；",
+                "2) 代理出口不稳定（视频签名 URL 绑定出口 IP，切换节点会触发 403）；",
+                "3) 代理规则未同时覆盖 youtube.com 与 *.googlevideo.com。",
+                "",
+                "建议：",
+                "- 重新导出 YouTube cookies（Netscape 格式）；",
+                "- 确保 yt-dlp 全流程走同一个稳定代理出口（避免负载均衡轮换）；",
+                "- 在代理工具中将 youtube.com / googlevideo.com 设为同一路由策略。",
+            ]
+            raise RuntimeError("\n".join(hint_lines)) from e
+        raise
 
     out = Path(output_dir)
     video_path = _pick_downloaded_video_file(out)

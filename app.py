@@ -11,6 +11,7 @@ import inspect
 import os
 from pathlib import Path
 import queue
+import shutil
 import sys
 import threading
 import time
@@ -100,6 +101,47 @@ class _TeeStream:
 # 全局锁：同一时间只允许一个处理任务
 _processing_lock = threading.Lock()
 _VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".ts"}
+_GRADIO_TEMP_DIR = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Temp" / "gradio"
+
+
+def clear_gradio_temp_handler():
+    """手动清理 Windows 下的 Gradio 临时目录内容。"""
+    temp_dir = _GRADIO_TEMP_DIR
+
+    if not temp_dir.exists():
+        return f"ℹ 未找到目录，无需清理：{temp_dir}"
+    if not temp_dir.is_dir():
+        return f"⚠ 目标路径不是目录，已取消清理：{temp_dir}"
+
+    removed_files = 0
+    removed_dirs = 0
+    failed_items: list[str] = []
+
+    for child in list(temp_dir.iterdir()):
+        try:
+            if child.is_symlink() or child.is_file():
+                child.unlink()
+                removed_files += 1
+            elif child.is_dir():
+                shutil.rmtree(child)
+                removed_dirs += 1
+            else:
+                child.unlink(missing_ok=True)
+                removed_files += 1
+        except FileNotFoundError:
+            continue
+        except Exception as exc:
+            failed_items.append(f"- {child.name}: {exc}")
+
+    summary = (
+        f"✅ 清理完成：删除 {removed_files} 个文件、{removed_dirs} 个目录。"
+        f"\n目标目录：{temp_dir}"
+    )
+    if failed_items:
+        details = "\n".join(failed_items[:5])
+        more = "" if len(failed_items) <= 5 else f"\n... 另有 {len(failed_items) - 5} 项删除失败"
+        summary += f"\n⚠ {len(failed_items)} 项删除失败，常见原因是文件仍被占用：\n{details}{more}"
+    return summary
 
 
 def process_all_input_handler(
@@ -349,6 +391,16 @@ def build_ui():
                             variant="secondary",
                             size="lg",
                         )
+                        cleanup_temp_btn = gr.Button(
+                            "🧹 清理 Gradio 临时目录",
+                            variant="secondary",
+                        )
+                        cleanup_status = gr.Textbox(
+                            label="🛠 维护结果",
+                            lines=4,
+                            interactive=False,
+                            value=f"目标目录：{_GRADIO_TEMP_DIR}",
+                        )
 
                     # ---- 右栏：输出 ----
                     with gr.Column(scale=1):
@@ -387,6 +439,11 @@ def build_ui():
                         translate_name_check,
                     ],
                     outputs=[log_output, file_output],
+                )
+                cleanup_temp_btn.click(
+                    fn=clear_gradio_temp_handler,
+                    inputs=[],
+                    outputs=[cleanup_status],
                 )
 
             with gr.Tab("设置"):

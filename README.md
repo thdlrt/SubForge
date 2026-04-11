@@ -53,10 +53,12 @@ pip install -r requirements.cpu.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 ### 3. 系统工具
 
-| 工具 | 用途 | 安装方式 |
-|------|------|----------|
-| [ffmpeg](https://ffmpeg.org/) | 视频压制 / 音频处理 / 探测 | `winget install ffmpeg` 或官网下载，需加入 PATH |
-| [yt-dlp](https://github.com/yt-dlp/yt-dlp) | YouTube 下载 | 已包含在 `requirements.txt` |
+
+| 工具                                         | 用途               | 安装方式                                   |
+| ------------------------------------------ | ---------------- | -------------------------------------- |
+| [ffmpeg](https://ffmpeg.org/)              | 视频压制 / 音频处理 / 探测 | `winget install ffmpeg` 或官网下载，需加入 PATH |
+| [yt-dlp](https://github.com/yt-dlp/yt-dlp) | YouTube 下载       | 已包含在 `requirements.txt`                |
+
 
 ### 4. 安装后自检
 
@@ -87,6 +89,7 @@ Copy-Item .\config.example.json .\config.json
 ### 6. 补充说明
 
 faster-whisper 默认优先使用 GPU（CUDA），无 GPU 会自动回退 CPU：
+
 - NVIDIA 显卡 + 安装 [CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit)
 - 如无 GPU，脚本会自动回退到 CPU（速度较慢，建议将 `whisper_model` 调小为 `base` 或 `tiny`）
 
@@ -130,6 +133,7 @@ python app.py -w
 
 - **设置** 标签页：表单与 **JSON 编辑器实时联动**；**保存并应用** 会写入 `config.json` 并 **自动重启本程序**，新进程重新加载配置，避免内存与磁盘不一致。
 - **处理** 标签页：
+ - 可点击“清理 Gradio 临时目录”按钮，手动清空 `C:\Windows\Temp\gradio` 下的缓存文件；若个别文件仍被占用，界面会显示失败项。
 
 1. 粘贴 YouTube 链接（每行一个）和/或上传本地视频文件
 2. 可选择是否压制硬字幕、是否启用 AI 中文配音、是否启用 AI 画质增强、是否启用 AI 内容总结
@@ -188,135 +192,156 @@ output/
 
 ### 语音识别
 
-| 参数 | 默认值 | 可选值 | 说明 |
-|------|--------|--------|------|
-| `whisper_model` | `"medium"` | `tiny` / `base` / `small` / `medium` / `large-v3` | 模型越大越准但越慢，`tiny` 极快低精度，`large-v3` 最准 |
-| `device` | `"auto"` | `auto` / `cuda` / `cpu` | 推理设备，`auto` 自动检测 GPU |
-| `compute_type` | `"auto"` | `auto` / `float16` / `int8` / `float32` | 推理精度，GPU 推荐 `float16`，CPU 推荐 `int8` |
-| `video_language` | `null` | `null` / `en` / `zh` / `ja` / `ko` / `fr` / `de` / `es` / `ru` | 视频语言；`null` 表示自动检测，手动指定语言会更快更稳 |
-| `subtitle_max_gap_ms` | `2000` | 500~5000 | 词级停顿阈值（毫秒）。大于该值时优先直接断句，是最重要的“按停顿切句”参数 |
-| `subtitle_max_chars` | `120` | 40~220 | 基础字幕长度上限。新算法不会一到这个值就硬切，而是把它作为目标长度和后续硬上限的基准 |
+
+| 参数                    | 默认值        | 可选值                                                            | 说明                                         |
+| --------------------- | ---------- | -------------------------------------------------------------- | ------------------------------------------ |
+| `whisper_model`       | `"medium"` | `tiny` / `base` / `small` / `medium` / `large-v3`              | 模型越大越准但越慢，`tiny` 极快低精度，`large-v3` 最准       |
+| `device`              | `"auto"`   | `auto` / `cuda` / `cpu`                                        | 推理设备，`auto` 自动检测 GPU                       |
+| `compute_type`        | `"auto"`   | `auto` / `float16` / `int8` / `float32`                        | 推理精度，GPU 推荐 `float16`，CPU 推荐 `int8`        |
+| `video_language`      | `null`     | `null` / `en` / `zh` / `ja` / `ko` / `fr` / `de` / `es` / `ru` | 视频语言；`null` 表示自动检测，手动指定语言会更快更稳             |
+| `subtitle_max_gap_ms` | `2000`     | 500~5000                                                       | 词级停顿阈值（毫秒）。大于该值时优先直接断句，是最重要的“按停顿切句”参数      |
+| `subtitle_max_chars`  | `120`      | 40~220                                                         | 基础字幕长度上限。新算法不会一到这个值就硬切，而是把它作为目标长度和后续硬上限的基准 |
+
+
 > 日常通常只需要先调 `subtitle_max_gap_ms` 和 `subtitle_max_chars`。候选窗口大小已经下沉为算法内部默认值，其余可调项收进了 `subtitle_advanced`，默认一般不用改。
 
 #### 高级断句参数：`subtitle_advanced`
 
-| 参数 | 默认值 | 可选值 | 说明 |
-|------|--------|--------|------|
-| `subtitle_advanced.target_chars_ratio` | `0.82` | 0.6~1.0 | 候选断点的目标长度比例，实际目标长度 = `subtitle_max_chars * ratio` |
-| `subtitle_advanced.min_chars_ratio` | `0.38` | 0.2~0.6 | 过短字幕惩罚阈值，低于该比例会明显降权，减少碎片句 |
-| `subtitle_advanced.hard_max_chars_ratio` | `1.35` | 1.1~1.8 | 超长硬上限比例，超过后必须在窗口内选断点 |
-| `subtitle_advanced.hard_max_chars_bias` | `18` | 0~40 | 小字幕上限补偿值，避免 `subtitle_max_chars` 较小时过早硬切 |
-| `subtitle_advanced.soft_max_duration_sec` | `4.8` | 2.5~6.0 | 软时长阈值，到达后开始积极寻找断点 |
-| `subtitle_advanced.hard_max_duration_sec` | `6.4` | 4.0~8.0 | 硬时长阈值，超过后必须落断点 |
-| `subtitle_advanced.min_words` | `3` | 1~8 | 最小词数要求，避免把一个完整句过早切成一两个词的碎片 |
-| `subtitle_advanced.merge_max_gap_sec` | `0.35` | 0.1~0.8 | 短尾句合并时允许的最大间隔 |
-| `subtitle_advanced.merge_max_duration_sec` | `6.0` | 3.0~8.0 | 合并后整条字幕允许的最大时长 |
-| `subtitle_advanced.merge_max_chars_ratio` | `1.35` | 1.0~1.8 | 合并后字幕最大长度比例 |
-| `subtitle_advanced.merge_max_chars_bias` | `24` | 0~40 | 合并后字幕长度补偿值 |
-| `subtitle_advanced.short_tail_max_words` | `3` | 1~6 | 认定为“短尾句”的最大词数 |
-| `subtitle_advanced.short_tail_max_chars` | `18` | 6~30 | 认定为“短尾句”的最大字符数 |
-| `subtitle_advanced.short_tail_max_duration_sec` | `1.4` | 0.5~2.5 | 认定为“短尾句”的最大时长 |
-| `subtitle_advanced.split_max_duration_sec` | `6.8` | 4.0~9.0 | 后处理拆分超长字幕时使用的最大时长阈值 |
+
+| 参数                                              | 默认值    | 可选值     | 说明                                                |
+| ----------------------------------------------- | ------ | ------- | ------------------------------------------------- |
+| `subtitle_advanced.target_chars_ratio`          | `0.82` | 0.6~1.0 | 候选断点的目标长度比例，实际目标长度 = `subtitle_max_chars * ratio` |
+| `subtitle_advanced.min_chars_ratio`             | `0.38` | 0.2~0.6 | 过短字幕惩罚阈值，低于该比例会明显降权，减少碎片句                         |
+| `subtitle_advanced.hard_max_chars_ratio`        | `1.35` | 1.1~1.8 | 超长硬上限比例，超过后必须在窗口内选断点                              |
+| `subtitle_advanced.hard_max_chars_bias`         | `18`   | 0~40    | 小字幕上限补偿值，避免 `subtitle_max_chars` 较小时过早硬切          |
+| `subtitle_advanced.soft_max_duration_sec`       | `4.8`  | 2.5~6.0 | 软时长阈值，到达后开始积极寻找断点                                 |
+| `subtitle_advanced.hard_max_duration_sec`       | `6.4`  | 4.0~8.0 | 硬时长阈值，超过后必须落断点                                    |
+| `subtitle_advanced.min_words`                   | `3`    | 1~8     | 最小词数要求，避免把一个完整句过早切成一两个词的碎片                        |
+| `subtitle_advanced.merge_max_gap_sec`           | `0.35` | 0.1~0.8 | 短尾句合并时允许的最大间隔                                     |
+| `subtitle_advanced.merge_max_duration_sec`      | `6.0`  | 3.0~8.0 | 合并后整条字幕允许的最大时长                                    |
+| `subtitle_advanced.merge_max_chars_ratio`       | `1.35` | 1.0~1.8 | 合并后字幕最大长度比例                                       |
+| `subtitle_advanced.merge_max_chars_bias`        | `24`   | 0~40    | 合并后字幕长度补偿值                                        |
+| `subtitle_advanced.short_tail_max_words`        | `3`    | 1~6     | 认定为“短尾句”的最大词数                                     |
+| `subtitle_advanced.short_tail_max_chars`        | `18`   | 6~30    | 认定为“短尾句”的最大字符数                                    |
+| `subtitle_advanced.short_tail_max_duration_sec` | `1.4`  | 0.5~2.5 | 认定为“短尾句”的最大时长                                     |
+| `subtitle_advanced.split_max_duration_sec`      | `6.8`  | 4.0~9.0 | 后处理拆分超长字幕时使用的最大时长阈值                               |
+
 
 > 新版断句器仍然保留内部清理步骤，例如短尾句合并和超长句拆分，但这些属于算法内部流程，不再单独打印后处理日志。
 
 ### 下载
 
-| 参数 | 默认值 | 可选值 | 说明 |
-|------|--------|--------|------|
-| `max_video_height` | `1080` | `720` / `1080` / `1440` / `2160` | YouTube 下载的最大分辨率 |
-| `ytdlp_client` | `""` | `ios` / `tv_embedded` / `web` / `""` | 模拟的 YouTube 客户端类型。`ios` 和 `tv_embedded` 有时可绕过 bot 检测；留空则使用默认 web 客户端 |
-| `ytdlp_cookies` | `""` | 文件路径或浏览器名 | cookies 配置，支持两种模式（见下方说明）：填文件路径如 `"./cookies/youtube.txt"`（建议放在项目下 **`cookies/`** 目录）使用导出的 cookies 文件；填浏览器名如 `"edge"` 直接从浏览器读取。留空则不使用。**当某域名未在 `ytdlp_cookies_by_host` 中命中时，会回退使用此项** |
-| `ytdlp_cookies_by_host` | `{}` | JSON 对象 | **按域名后缀**配置 Cookie：键为 hostname 后缀（如 `gamedev.tv` 会匹配 `www.gamedev.tv`），值为 cookies 文件路径或浏览器名，语义与 `ytdlp_cookies` 相同。**最长后缀优先匹配**。路径不存在时该次下载**不使用** Cookie。留空对象且全局 `ytdlp_cookies` 也为空则不带 Cookie |
+
+| 参数                      | 默认值    | 可选值                                  | 说明                                                                                                                                                                                             |
+| ----------------------- | ------ | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `max_video_height`      | `1080` | `720` / `1080` / `1440` / `2160`     | YouTube 下载的最大分辨率                                                                                                                                                                               |
+| `ytdlp_client`          | `""`   | `ios` / `tv_embedded` / `web` / `""` | 模拟的 YouTube 客户端类型。`ios` 和 `tv_embedded` 有时可绕过 bot 检测；留空则使用默认 web 客户端                                                                                                                           |
+| `ytdlp_cookies`         | `""`   | 文件路径或浏览器名                            | cookies 配置，支持两种模式（见下方说明）：填文件路径如 `"./cookies/youtube.txt"`（建议放在项目下 `**cookies/**` 目录）使用导出的 cookies 文件；填浏览器名如 `"edge"` 直接从浏览器读取。留空则不使用。**当某域名未在 `ytdlp_cookies_by_host` 中命中时，会回退使用此项**           |
+| `ytdlp_cookies_by_host` | `{}`   | JSON 对象                              | **按域名后缀**配置 Cookie：键为 hostname 后缀（如 `gamedev.tv` 会匹配 `www.gamedev.tv`），值为 cookies 文件路径或浏览器名，语义与 `ytdlp_cookies` 相同。**最长后缀优先匹配**。路径不存在时该次下载**不使用** Cookie。留空对象且全局 `ytdlp_cookies` 也为空则不带 Cookie |
+
 
 ### 翻译 API
 
-| 参数 | 默认值 | 可选值 | 说明 |
-|------|--------|--------|------|
-| `qwen_api_key` | `""` | — | API Key（**必填**） |
-| `qwen_base_url` | — | — | API 接口地址，填写所用服务商提供的 base URL |
-| `qwen_model` | `"qwen3.5-plus"` | `qwen3.5-plus` / `qwen3.5-turbo` / `qwen-turbo` | 翻译使用的模型 |
-| `translate_batch_size` | `50` | 10~100 | 每批翻译的字幕条数，越大越快但易超 token 限制 |
-| `translate_concurrency` | `10` | 1~20 | 并发请求批数，受 API QPS 限制 |
-| `api_retry` | `3` | 1~10 | 单批翻译失败的最大重试次数 |
-| `api_sleep` | `0.5` | 0~2 | 并发批次间的错开抖动上限（秒） |
+
+| 参数                      | 默认值              | 可选值                                             | 说明                           |
+| ----------------------- | ---------------- | ----------------------------------------------- | ---------------------------- |
+| `qwen_api_key`          | `""`             | —                                               | API Key（**必填**）              |
+| `qwen_base_url`         | —                | —                                               | API 接口地址，填写所用服务商提供的 base URL |
+| `qwen_model`            | `"qwen3.5-plus"` | `qwen3.5-plus` / `qwen3.5-turbo` / `qwen-turbo` | 翻译使用的模型                      |
+| `translate_batch_size`  | `50`             | 10~100                                          | 每批翻译的字幕条数，越大越快但易超 token 限制   |
+| `translate_concurrency` | `10`             | 1~20                                            | 并发请求批数，受 API QPS 限制          |
+| `api_retry`             | `3`              | 1~10                                            | 单批翻译失败的最大重试次数                |
+| `api_sleep`             | `0.5`            | 0~2                                             | 并发批次间的错开抖动上限（秒）              |
+
 
 ### 字幕样式
 
-| 参数 | 默认值 | 可选值 | 说明 |
-|------|--------|--------|------|
-| `font_size` | `20` | 16~28 | 字体大小（像素） |
-| `subtitle_font` | `"Microsoft YaHei"` | `Microsoft YaHei` / `SimHei` / `Arial` / `Noto Sans CJK SC` | 字体名称 |
-| `subtitle_primary_color` | `"&H00FFFFFF"` | 白色 `&H00FFFFFF` / 黄色 `&H0000FFFF` | 字体颜色（ASS 格式：`&H` + 透明度 + BGR 十六进制） |
-| `subtitle_outline_color` | `"&H00000000"` | 黑色 `&H00000000` | 描边颜色 |
-| `subtitle_outline` | `1` | `0`=无 / `1`=细边 / `2`=粗边 | 描边粗细 |
-| `subtitle_shadow` | `0` | `0`=关闭 / `1`=轻阴影 / `2`=重阴影 | 阴影偏移距离 |
-| `subtitle_margin_v` | `30` | 10~80 | 字幕距视频底部距离（像素），越大越高 |
+
+| 参数                       | 默认值                 | 可选值                                                         | 说明                                 |
+| ------------------------ | ------------------- | ----------------------------------------------------------- | ---------------------------------- |
+| `font_size`              | `20`                | 16~28                                                       | 字体大小（像素）                           |
+| `subtitle_font`          | `"Microsoft YaHei"` | `Microsoft YaHei` / `SimHei` / `Arial` / `Noto Sans CJK SC` | 字体名称                               |
+| `subtitle_primary_color` | `"&H00FFFFFF"`      | 白色 `&H00FFFFFF` / 黄色 `&H0000FFFF`                           | 字体颜色（ASS 格式：`&H` + 透明度 + BGR 十六进制） |
+| `subtitle_outline_color` | `"&H00000000"`      | 黑色 `&H00000000`                                             | 描边颜色                               |
+| `subtitle_outline`       | `1`                 | `0`=无 / `1`=细边 / `2`=粗边                                     | 描边粗细                               |
+| `subtitle_shadow`        | `0`                 | `0`=关闭 / `1`=轻阴影 / `2`=重阴影                                  | 阴影偏移距离                             |
+| `subtitle_margin_v`      | `30`                | 10~80                                                       | 字幕距视频底部距离（像素），越大越高                 |
+
 
 ### AI 配音与 TTS 引擎
 
-在 `config.json` 中通过 **`tts_provider`** 选择引擎：
+在 `config.json` 中通过 `**tts_provider`** 选择引擎：
 
-| 取值 | 说明 |
-|------|------|
-| `edge` | 默认。无需额外密钥，使用微软 Edge 在线 TTS（[语音列表](https://github.com/rany2/edge-tts#voices)） |
-| `qwen_tts` | 阿里云 DashScope 多模态 TTS，需配置 `qwen_tts_api_key` 等 |
+
+| 取值          | 说明                                                                                                         |
+| ----------- | ---------------------------------------------------------------------------------------------------------- |
+| `edge`      | 默认。无需额外密钥，使用微软 Edge 在线 TTS（[语音列表](https://github.com/rany2/edge-tts#voices)）                               |
+| `qwen_tts`  | 阿里云 DashScope 多模态 TTS，需配置 `qwen_tts_api_key` 等                                                             |
 | `cosyvoice` | 本地 [CosyVoice](https://github.com/FunAudioLLM/CosyVoice)，首次使用会在 `cosyvoice_local/` 自动创建独立环境并下载模型（详见该目录下说明） |
+
 
 **字幕合并（影响每条 TTS 的文本长度）**：`tts_merge_gap_ms`、`tts_merge_max_chars` 对 edge / qwen_tts 生效；使用 CosyVoice 时额外可用 `cosyvoice_merge_max_chars`。合并越激进，请求次数越少，但单条越长越容易超时或显存压力变大。
 
-**CosyVoice 模式 `cosyvoice_mode`**：`preset`（预设说话人 + `cosyvoice_voice`）、`zero_shot`（参考音频 + 参考文案）、`cross_lingual`（跨语种，依服务端实现而定）。`zero_shot` 需填写 `cosyvoice_prompt_audio_path` 与 `cosyvoice_prompt_text`。可用项目根目录脚本 **`python generate_qwen_reference.py`**（需已配置 Qwen TTS）生成与 Cherry 等音色一致的参考 WAV，并自动生成同内容的 `.txt` 供 prompt 使用。
+**CosyVoice 模式 `cosyvoice_mode`**：`preset`（预设说话人 + `cosyvoice_voice`）、`zero_shot`（参考音频 + 参考文案）、`cross_lingual`（跨语种，依服务端实现而定）。`zero_shot` 需填写 `cosyvoice_prompt_audio_path` 与 `cosyvoice_prompt_text`。可用项目根目录脚本 `**python generate_qwen_reference.py**`（需已配置 Qwen TTS）生成与 Cherry 等音色一致的参考 WAV，并自动生成同内容的 `.txt` 供 prompt 使用。
 
 **性能提示**：CosyVoice 服务端按设计**同一时间只处理一路合成**（避免 OOM）；`cosyvoice_fp16` 默认开启以降低显存占用。修改 `cosyvoice_device` 或与模型相关的配置后，需重启本地 CosyVoice 服务（关闭应用后重开，或自行结束对应进程）。
 
 #### 通用与 edge-tts
 
-| 参数 | 默认值 | 可选值 | 说明 |
-|------|--------|--------|------|
-| `tts_provider` | `"edge"` | `edge` / `qwen_tts` / `cosyvoice` | 配音引擎 |
-| `tts_merge_gap_ms` | `280` | — | 相邻字幕若间隔小于此值（毫秒）可合并为一条 TTS |
-| `tts_merge_max_chars` | `90` | — | 合并后单条字幕最大字符数（edge / qwen_tts 路径） |
-| `tts_voice` | `"zh-CN-YunjianNeural"` | 参见 edge-tts 文档 | **edge** 下的发音人 |
-| `tts_rate` | `"+0%"` | `-50%` ~ `+100%` | TTS 基础语速调整 |
-| `tts_volume` | `"+0%"` | `-50%` ~ `+50%` | TTS 音量调整 |
-| `tts_bg_volume` | `0.5` | 0.0~1.0 | 背景音混合音量（0=静音，1=原音量） |
-| `tts_max_speed` | `1.5` | 1.0~2.0 | 合成语音长于画面对白时段时的最大加速倍率；`1.0` 表示不加速 |
+
+| 参数                    | 默认值                     | 可选值                               | 说明                               |
+| --------------------- | ----------------------- | --------------------------------- | -------------------------------- |
+| `tts_provider`        | `"edge"`                | `edge` / `qwen_tts` / `cosyvoice` | 配音引擎                             |
+| `tts_merge_gap_ms`    | `280`                   | —                                 | 相邻字幕若间隔小于此值（毫秒）可合并为一条 TTS        |
+| `tts_merge_max_chars` | `90`                    | —                                 | 合并后单条字幕最大字符数（edge / qwen_tts 路径） |
+| `tts_voice`           | `"zh-CN-YunjianNeural"` | 参见 edge-tts 文档                    | **edge** 下的发音人                   |
+| `tts_rate`            | `"+0%"`                 | `-50%` ~ `+100%`                  | TTS 基础语速调整                       |
+| `tts_volume`          | `"+0%"`                 | `-50%` ~ `+50%`                   | TTS 音量调整                         |
+| `tts_bg_volume`       | `0.5`                   | 0.0~1.0                           | 背景音混合音量（0=静音，1=原音量）              |
+| `tts_max_speed`       | `1.5`                   | 1.0~2.0                           | 合成语音长于画面对白时段时的最大加速倍率；`1.0` 表示不加速 |
+
 
 #### Qwen TTS（`tts_provider`: `qwen_tts`）
 
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `qwen_tts_api_key` | `""` | DashScope API Key（必填） |
-| `qwen_tts_base_url` | 官方地址 | 一般无需修改 |
-| `qwen_tts_model` | `qwen3-tts-flash` | 模型名 |
-| `qwen_tts_voice` | `Cherry` | 音色名（以 DashScope 文档为准） |
+
+| 参数                  | 默认值               | 说明                    |
+| ------------------- | ----------------- | --------------------- |
+| `qwen_tts_api_key`  | `""`              | DashScope API Key（必填） |
+| `qwen_tts_base_url` | 官方地址              | 一般无需修改                |
+| `qwen_tts_model`    | `qwen3-tts-flash` | 模型名                   |
+| `qwen_tts_voice`    | `Cherry`          | 音色名（以 DashScope 文档为准） |
+
 
 #### CosyVoice 本地服务（`tts_provider`: `cosyvoice`）
 
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `cosyvoice_api_url` | `http://127.0.0.1:9880` | HTTP 服务地址 |
-| `cosyvoice_port` | `9880` | 与 URL 端口一致即可 |
-| `cosyvoice_mode` | `preset` | `preset` / `zero_shot` / `cross_lingual` |
-| `cosyvoice_voice` | `中文男` | **preset** 模式下的预设说话人名称 |
-| `cosyvoice_prompt_audio_path` | `""` | **zero_shot** 等模式下参考音频路径 |
-| `cosyvoice_prompt_text` | `""` | 与参考音频对应的文案 |
-| `cosyvoice_device` | `cpu` | 推理设备：`cpu` / `cuda` / `auto`（bootstrap 会据环境选择 PyTorch CUDA/CPU 包） |
-| `cosyvoice_repo_url` | 官方 Git | CosyVoice 仓库地址 |
-| `cosyvoice_model_id` | `FunAudioLLM/CosyVoice-300M-SFT` | 预训练模型 ID |
-| `cosyvoice_ttsfrd_id` | `FunAudioLLM/CosyVoice-ttsfrd` | ttsfrd 资源 ID |
-| `cosyvoice_model_source` | `auto` | 模型下载源 |
-| `cosyvoice_start_timeout` | `900` | 首次拉起服务等待就绪的超时（秒） |
-| `cosyvoice_request_timeout` | `180` | 单次合成 HTTP 超时（秒） |
-| `cosyvoice_merge_max_chars` | `72` | CosyVoice 路径下合并单条最大字符数 |
-| `cosyvoice_fp16` | `true` | GPU 上是否使用半精度以省显存 |
+
+| 参数                            | 默认值                              | 说明                                                                |
+| ----------------------------- | -------------------------------- | ----------------------------------------------------------------- |
+| `cosyvoice_api_url`           | `http://127.0.0.1:9880`          | HTTP 服务地址                                                         |
+| `cosyvoice_port`              | `9880`                           | 与 URL 端口一致即可                                                      |
+| `cosyvoice_mode`              | `preset`                         | `preset` / `zero_shot` / `cross_lingual`                          |
+| `cosyvoice_voice`             | `中文男`                            | **preset** 模式下的预设说话人名称                                            |
+| `cosyvoice_prompt_audio_path` | `""`                             | **zero_shot** 等模式下参考音频路径                                          |
+| `cosyvoice_prompt_text`       | `""`                             | 与参考音频对应的文案                                                        |
+| `cosyvoice_device`            | `cpu`                            | 推理设备：`cpu` / `cuda` / `auto`（bootstrap 会据环境选择 PyTorch CUDA/CPU 包） |
+| `cosyvoice_repo_url`          | 官方 Git                           | CosyVoice 仓库地址                                                    |
+| `cosyvoice_model_id`          | `FunAudioLLM/CosyVoice-300M-SFT` | 预训练模型 ID                                                          |
+| `cosyvoice_ttsfrd_id`         | `FunAudioLLM/CosyVoice-ttsfrd`   | ttsfrd 资源 ID                                                      |
+| `cosyvoice_model_source`      | `auto`                           | 模型下载源                                                             |
+| `cosyvoice_start_timeout`     | `900`                            | 首次拉起服务等待就绪的超时（秒）                                                  |
+| `cosyvoice_request_timeout`   | `180`                            | 单次合成 HTTP 超时（秒）                                                   |
+| `cosyvoice_merge_max_chars`   | `72`                             | CosyVoice 路径下合并单条最大字符数                                            |
+| `cosyvoice_fp16`              | `true`                           | GPU 上是否使用半精度以省显存                                                  |
+
 
 ### AI 画质增强
 
-| 参数 | 默认值 | 可选值 | 说明 |
-|------|--------|--------|------|
-| `enhance_model` | `"RealESRGAN_x4plus"` | `RealESRGAN_x4plus` / `RealESRGAN_x4plus_anime_6B` / `RealESRGAN_x2plus` | 超分模型。通用视频用 `x4plus`；动漫/二次元用 `x4plus_anime_6B`（更轻量）；只需 2x 放大用 `x2plus` |
-| `enhance_outscale` | `4` | `2` / `4` | 放大倍数。输出分辨率超过 4K（3840×2160）时会自动限制 |
+
+| 参数                 | 默认值                   | 可选值                                                                      | 说明                                                                    |
+| ------------------ | --------------------- | ------------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| `enhance_model`    | `"RealESRGAN_x4plus"` | `RealESRGAN_x4plus` / `RealESRGAN_x4plus_anime_6B` / `RealESRGAN_x2plus` | 超分模型。通用视频用 `x4plus`；动漫/二次元用 `x4plus_anime_6B`（更轻量）；只需 2x 放大用 `x2plus` |
+| `enhance_outscale` | `4`                   | `2` / `4`                                                                | 放大倍数。输出分辨率超过 4K（3840×2160）时会自动限制                                      |
+
 
 > 模型权重文件（约 64MB）在首次运行时自动从 GitHub Releases 下载，保存在 `realesrgan` 包目录的 `weights/` 下。
 
@@ -342,14 +367,14 @@ YouTube 对部分 IP 或视频启用 bot 检测，yt-dlp 会报错 `Sign in to c
 
 #### 模式二：导出 cookies 文件（浏览器不需要关闭）
 
-1. 在 Chrome / Edge 中安装扩展 [**Get cookies.txt LOCALLY**](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)
+1. 在 Chrome / Edge 中安装扩展 **[Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)**
 2. 打开 [youtube.com](https://www.youtube.com) 并**确保已登录账号**
 3. 点击扩展图标 → 选择「Export As」→「cookies.txt」
-4. 将导出的文件保存到项目目录 **`cookies/`** 下，例如 `cookies/youtube.txt`
+4. 将导出的文件保存到项目目录 `**cookies/`** 下，例如 `cookies/youtube.txt`
 5. 在 `config.json` 中填写路径：
-   ```json
+  ```json
    "ytdlp_cookies": "./cookies/youtube.txt"
-   ```
+  ```
 
 #### 注意事项
 
@@ -372,6 +397,7 @@ yt-dlp 对 GameDev.tv **只识别「学习中心」数字 ID 链接**，格式�
 `torchaudio 2.10+` 默认依赖 `torchcodec` 保存音频，而 `torchcodec` 在 Windows 上需要 FFmpeg full-shared DLLs，通常会报 `Could not load libtorchcodec` 错误。
 
 **解决方案**（本项目已内置处理）：
+
 1. 确保已安装 `soundfile`：`pip install soundfile`
 2. 卸载 `torchcodec`（如已安装）：`pip uninstall torchcodec`
 3. 本项目通过 `_run_demucs.py` 包装脚本自动用 `soundfile` 替代 `torchcodec` 保存音频，无需手动修改 demucs 源码
@@ -417,6 +443,7 @@ yt-dlp 对 GameDev.tv **只识别「学习中心」数字 ID 链接**，格式�
 ### 画质增强报 lzma DLL 错误（Windows）
 
 `basicsr` 依赖 `lzma`，conda 自建环境有时缺少 `liblzma.dll`：
+
 ```powershell
 # 将 base 环境的 DLL 复制到当前环境
 Copy-Item "$env:CONDA_PREFIX\..\..\Library\bin\liblzma.dll" "$env:CONDA_PREFIX\Library\bin\"
