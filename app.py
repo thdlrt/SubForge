@@ -378,7 +378,7 @@ def build_ui():
     with gr.Blocks(**blocks_kw) as app:
         gr.Markdown(
             "# 🎬 SubForge — AI 字幕一键生成工具\n"
-            "视频 / 音频 → 语音识别 → AI 翻译；视频模式额外支持总结、压制、配音"
+            "视频模式：识别 + 翻译；音频模式：只转写，可选区分说话人"
             + api_warning
         )
 
@@ -488,8 +488,8 @@ def build_ui():
                             file_types=sorted(_AUDIO_EXTS),
                         )
                         gr.Markdown(
-                            "音频模式只生成字幕文件（英文 / 中文 / 双语），"
-                            "不会执行总结、压制硬字幕、AI 配音、画质增强。"
+                            "音频模式只做转写，输出识别字幕；"
+                            "不会执行翻译、总结、压制硬字幕、AI 配音、画质增强。"
                         )
                         audio_speaker_check = gr.Checkbox(
                             label="字幕中区分说话人（需在设置中配置 Hugging Face Token）",

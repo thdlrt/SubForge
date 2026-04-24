@@ -4,9 +4,13 @@ Wrapper script: apply speaker diarization to an SRT file in an isolated child pr
 Usage: python _run_diarization.py <json_args>
 """
 import json
+import io
 import os
 import re
 import sys
+import warnings
+from collections import Counter
+from contextlib import redirect_stderr, redirect_stdout
 
 import numpy as np
 import srt
@@ -21,6 +25,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 _PREFIX_RE = re.compile(r"^\[[^\]]+\]\s+")
+
+warnings.filterwarnings(
+    "ignore",
+    message=r"\s*torchcodec is not installed correctly so built-in audio decoding will fail.*",
+    category=UserWarning,
+)
 
 
 def _choose_device(device_name: str) -> str:
@@ -47,6 +57,22 @@ def _overlap(start_a: float, end_a: float, start_b: float, end_b: float) -> floa
 def _load_subtitles(srt_path: str):
     with open(srt_path, encoding="utf-8") as handle:
         return list(srt.parse(handle.read()))
+
+
+def _speaker_counter(subtitles) -> Counter:
+    counts: Counter = Counter()
+    for subtitle in subtitles:
+        text = (subtitle.content or "").strip()
+        match = re.match(r"^\[([^\]]+)\]", text)
+        if match:
+            counts[match.group(1)] += 1
+    return counts
+
+
+def _format_speaker_summary(counts: Counter) -> str:
+    if not counts:
+        return "未识别到说话人标签"
+    return "，".join(f"{speaker}: {count} 条" for speaker, count in sorted(counts.items()))
 
 
 def _load_audio_waveform(media_path: str):
@@ -83,18 +109,32 @@ def _diarize_with_pyannote(model_name: str, hf_token: str, device_name: str, aud
     import torch
 
     print(f"Loading diarization model '{model_name}'...")
-    pipeline = Pipeline.from_pretrained(model_name, token=hf_token)
-    target_device = _choose_device(device_name)
-    pipeline.to(torch.device(target_device))
-    pipeline_input = {
-        "waveform": audio_input["waveform"].to(torch.device(target_device)),
-        "sample_rate": audio_input["sample_rate"],
-    }
+    silent_buffer = io.StringIO()
+    with redirect_stdout(silent_buffer), redirect_stderr(silent_buffer):
+        pipeline = Pipeline.from_pretrained(model_name, token=hf_token)
+        target_device = _choose_device(device_name)
+        pipeline.to(torch.device(target_device))
+        pipeline_input = {
+            "waveform": audio_input["waveform"].to(torch.device(target_device)),
+            "sample_rate": audio_input["sample_rate"],
+        }
+        diarization = pipeline(pipeline_input)
+
     print(f"Running diarization on {target_device}...")
-    diarization = pipeline(pipeline_input)
+
+    annotation = diarization
+    if hasattr(diarization, "speaker_diarization"):
+        annotation = diarization.speaker_diarization
+    elif isinstance(diarization, dict) and "speaker_diarization" in diarization:
+        annotation = diarization["speaker_diarization"]
+
+    if not hasattr(annotation, "itertracks"):
+        raise RuntimeError(
+            f"pyannote 返回了不支持的说话人区分结果类型: {type(diarization).__name__}"
+        )
 
     segments: list[tuple[float, float, str]] = []
-    for turn, _track, speaker in diarization.itertracks(yield_label=True):
+    for turn, _track, speaker in annotation.itertracks(yield_label=True):
         segments.append((float(turn.start), float(turn.end), str(speaker)))
     segments.sort(key=lambda item: (item[0], item[1]))
     return segments
@@ -234,7 +274,8 @@ def main() -> None:
         print("No subtitles found; skipping diarization.")
         return
     if _all_tagged(subtitles):
-        print("Speaker labels already exist; skipping diarization.")
+        counts = _speaker_counter(subtitles)
+        print(f"Speaker labels already exist; skipping diarization. {_format_speaker_summary(counts)}")
         return
 
     audio_input = _load_audio_waveform(media_path)
@@ -284,7 +325,11 @@ def main() -> None:
     with open(srt_path, "w", encoding="utf-8") as handle:
         handle.write(srt.compose(subtitles))
 
-    print(f"Speaker diarization complete: {tagged_count} subtitles tagged, {len(speaker_map)} speakers detected")
+    counts = _speaker_counter(subtitles)
+    print(
+        f"Speaker diarization complete: 本次新增 {tagged_count} 条标签，"
+        f"当前共 {len(counts)} 位说话人（{_format_speaker_summary(counts)}）"
+    )
 
 
 if __name__ == "__main__":

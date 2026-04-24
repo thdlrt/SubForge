@@ -60,11 +60,12 @@ def _process_prepared(prepared, burn_subtitle=True, enable_dubbing=False,
 
     print(f"\n   工作目录: {os.path.abspath(output_dir)}")
     print(f"   语音识别: faster-whisper [{config.WHISPER_MODEL}] ← 本地 GPU")
-    print(f"   翻译引擎: Qwen3.5 API [{config.QWEN_MODEL}] ← 云端大模型")
     if is_audio:
-        print("   处理模式: 音频字幕模式（仅生成字幕文件）")
+        print("   处理模式: 音频转写模式（仅识别字幕文件）")
         if enable_speaker_diarization:
             print("   说话人区分: 已启用")
+    else:
+        print(f"   翻译引擎: Qwen3.5 API [{config.QWEN_MODEL}] ← 云端大模型")
 
     current_step = "初始化"
     en_srt_path = zh_srt_path = bi_srt_path = None
@@ -86,14 +87,16 @@ def _process_prepared(prepared, burn_subtitle=True, enable_dubbing=False,
             current_step = "2.5-AI内容总结"
             summary_md_path = step2_5_summarize_from_srt(en_srt_path, video_path)
 
-        current_step = "3-翻译字幕"
-        zh_srt_path, bi_srt_path = step3_translate(subs, video_path)
-
         if is_audio:
-            print("   音频模式已跳过：AI 总结、硬字幕压制、AI 配音")
+            print("   音频模式已跳过：字幕翻译、AI 总结、硬字幕压制、AI 配音")
         elif burn_subtitle:
+            current_step = "3-翻译字幕"
+            zh_srt_path, bi_srt_path = step3_translate(subs, video_path)
             current_step = "4-压制字幕"
             final_video = step4_burn_subtitles(video_path, bi_srt_path)
+        else:
+            current_step = "3-翻译字幕"
+            zh_srt_path, bi_srt_path = step3_translate(subs, video_path)
 
         if enable_dubbing and not is_audio:
             current_step = "5-分离音频"

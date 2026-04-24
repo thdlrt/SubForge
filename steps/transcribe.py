@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+from collections import Counter
 
 import srt
 
@@ -20,9 +21,21 @@ def _all_subtitles_have_speaker_prefix(subs) -> bool:
     return bool(texts) and all(_SPEAKER_PREFIX_RE.match(text) for text in texts)
 
 
+def _speaker_summary(subs) -> str:
+    counts: Counter = Counter()
+    for sub in subs:
+        text = (sub.content or "").strip()
+        match = re.match(r"^\[([^\]]+)\]", text)
+        if match:
+            counts[match.group(1)] += 1
+    if not counts:
+        return "未识别到说话人标签"
+    return "，".join(f"{speaker}: {count} 条" for speaker, count in sorted(counts.items()))
+
+
 def _apply_speaker_diarization(media_path, en_srt_path, subs):
     if _all_subtitles_have_speaker_prefix(subs):
-        print("⏭️  字幕已带说话人标签，跳过区分")
+        print(f"⏭️  字幕已带说话人标签，跳过区分（{_speaker_summary(subs)}）")
         return subs
 
     wrapper = os.path.join(
