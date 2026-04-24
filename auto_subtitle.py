@@ -5,6 +5,7 @@ YouTube 视频下载 + AI字幕生成 + Qwen3.5 API翻译 + 字幕压制 一键�
 
 import sys
 import os
+from pathlib import Path
 
 # 强制 stdout/stderr 使用 UTF-8，避免 Windows GBK 终端无法输出 Emoji
 if hasattr(sys.stdout, "reconfigure"):
@@ -27,11 +28,15 @@ from steps.burn       import step4_burn_subtitles
 from steps.dubbing    import step5_separate_audio, step6_tts_generate, step7_merge_audio
 
 
+_AUDIO_EXTS = {".aac", ".mp3", ".m4a", ".wav", ".flac", ".ogg", ".opus", ".wma"}
+
+
 # ======================== 流程编排 ========================
 
 
 def _process_prepared(prepared, burn_subtitle=True, enable_dubbing=False,
-                      enable_enhance=False, enable_summary=False):
+                      enable_enhance=False, enable_summary=False,
+                      enable_speaker_diarization=False):
     """第二阶段：处理已下载的视频（识别 → 总结(可选) → 翻译 → 压制字幕 → 配音）。
     接受 _prepare_source() 返回的字典；若准备阶段已失败则直接透传错误结果。"""
     source = prepared["source"]
@@ -50,10 +55,16 @@ def _process_prepared(prepared, burn_subtitle=True, enable_dubbing=False,
 
     video_path = prepared["video_path"]
     output_dir = prepared["output_dir"]
+    media_kind = prepared.get("media_kind", "video")
+    is_audio = media_kind == "audio"
 
     print(f"\n   工作目录: {os.path.abspath(output_dir)}")
     print(f"   语音识别: faster-whisper [{config.WHISPER_MODEL}] ← 本地 GPU")
     print(f"   翻译引擎: Qwen3.5 API [{config.QWEN_MODEL}] ← 云端大模型")
+    if is_audio:
+        print("   处理模式: 音频字幕模式（仅生成字幕文件）")
+        if enable_speaker_diarization:
+            print("   说话人区分: 已启用")
 
     current_step = "初始化"
     en_srt_path = zh_srt_path = bi_srt_path = None
@@ -61,25 +72,30 @@ def _process_prepared(prepared, burn_subtitle=True, enable_dubbing=False,
     final_video = dubbed_video = None
 
     try:
-        if enable_enhance:
+        if enable_enhance and not is_audio:
             current_step = "1.5-AI画质增强"
             video_path = step1b_enhance_video(video_path)
 
         current_step = "2-语音识别"
-        en_srt_path, subs = step2_transcribe(video_path)
+        en_srt_path, subs = step2_transcribe(
+            video_path,
+            enable_speaker_diarization=enable_speaker_diarization,
+        )
 
-        if enable_summary:
+        if enable_summary and not is_audio:
             current_step = "2.5-AI内容总结"
             summary_md_path = step2_5_summarize_from_srt(en_srt_path, video_path)
 
         current_step = "3-翻译字幕"
         zh_srt_path, bi_srt_path = step3_translate(subs, video_path)
 
-        if burn_subtitle:
+        if is_audio:
+            print("   音频模式已跳过：AI 总结、硬字幕压制、AI 配音")
+        elif burn_subtitle:
             current_step = "4-压制字幕"
             final_video = step4_burn_subtitles(video_path, bi_srt_path)
 
-        if enable_dubbing:
+        if enable_dubbing and not is_audio:
             current_step = "5-分离音频"
             bg_path = step5_separate_audio(video_path)
             current_step = "6-TTS语音合成"
@@ -138,13 +154,14 @@ def _process_prepared(prepared, burn_subtitle=True, enable_dubbing=False,
 
 def process_one(source, burn_subtitle=True, enable_dubbing=False,
                 enable_enhance=False, enable_summary=False,
-                translate_video_name=False):
+                translate_video_name=False, enable_speaker_diarization=False):
     """处理单个视频源（本地文件或 YouTube 链接）。
     组合 _prepare_source + _process_prepared，保持向后兼容。"""
     prepared = _prepare_source(source, translate_video_name=translate_video_name)
     return _process_prepared(prepared, burn_subtitle=burn_subtitle,
                              enable_dubbing=enable_dubbing, enable_enhance=enable_enhance,
-                             enable_summary=enable_summary)
+                             enable_summary=enable_summary,
+                             enable_speaker_diarization=enable_speaker_diarization)
 
 
 def main():

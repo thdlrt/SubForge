@@ -14,6 +14,10 @@ def _load_config():
         "device": "auto",
         "compute_type": "auto",
         "video_language": None,
+        "speaker_diarization_hf_token": "",
+        "speaker_diarization_model": "pyannote/speaker-diarization-3.1",
+        "speaker_diarization_device": "auto",
+        "speaker_diarization_label_prefix": "说话人",
         "max_video_height": 1080,
         "ytdlp_cookies": "",
         "ytdlp_cookies_by_host": {},
@@ -189,7 +193,10 @@ def deep_merge_overlay(base: dict, overlay: dict) -> dict:
 def assign_from_cfg(cfg: dict) -> None:
     """用一份完整配置字典刷新本模块中的全局常量（供运行中热更新）。"""
     global _cfg, _subtitle_advanced
-    global WHISPER_MODEL, DEVICE, COMPUTE_TYPE, VIDEO_LANGUAGE, MAX_VIDEO_HEIGHT
+    global WHISPER_MODEL, DEVICE, COMPUTE_TYPE, VIDEO_LANGUAGE
+    global SPEAKER_DIARIZATION_HF_TOKEN, SPEAKER_DIARIZATION_MODEL
+    global SPEAKER_DIARIZATION_DEVICE, SPEAKER_DIARIZATION_LABEL_PREFIX
+    global MAX_VIDEO_HEIGHT
     global YTDLP_COOKIES, YTDLP_COOKIES_BY_HOST, YTDLP_CLIENT, SUBTITLE_MAX_GAP_MS, SUBTITLE_MAX_CHARS
     global SUBTITLE_TARGET_CHARS_RATIO, SUBTITLE_MIN_CHARS_RATIO
     global SUBTITLE_HARD_MAX_CHARS_RATIO, SUBTITLE_HARD_MAX_CHARS_BIAS
@@ -219,6 +226,10 @@ def assign_from_cfg(cfg: dict) -> None:
     DEVICE = cfg["device"]
     COMPUTE_TYPE = cfg["compute_type"]
     VIDEO_LANGUAGE = cfg["video_language"]
+    SPEAKER_DIARIZATION_HF_TOKEN = cfg["speaker_diarization_hf_token"]
+    SPEAKER_DIARIZATION_MODEL = cfg["speaker_diarization_model"]
+    SPEAKER_DIARIZATION_DEVICE = cfg["speaker_diarization_device"]
+    SPEAKER_DIARIZATION_LABEL_PREFIX = cfg["speaker_diarization_label_prefix"]
     MAX_VIDEO_HEIGHT = cfg["max_video_height"]
     YTDLP_COOKIES = cfg["ytdlp_cookies"]
     YTDLP_COOKIES_BY_HOST = cfg["ytdlp_cookies_by_host"]

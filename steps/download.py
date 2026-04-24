@@ -96,9 +96,13 @@ def _ytdlp_extra_args(url: str | None) -> list:
     if hostname and _is_gamedev_hostname(hostname):
         # 部分 API/CDN 校验 Referer，与 cookies 一并提供
         args += ["--add-header", "Referer:https://gamedev.tv/"]
-    if hostname and config.YTDLP_CLIENT and _is_youtube_hostname(hostname):
-        args += ["--extractor-args", f"youtube:player_client={config.YTDLP_CLIENT}"]
-        print(f"   YouTube 客户端: {config.YTDLP_CLIENT}")
+    if hostname and _is_youtube_hostname(hostname):
+        # 新版 yt-dlp 在部分 YouTube 链路上需要远程 EJS challenge 组件，否则只会拿到 storyboard。
+        args += ["--remote-components", "ejs:github"]
+        print("   YouTube challenge 组件: ejs:github")
+        if config.YTDLP_CLIENT:
+            args += ["--extractor-args", f"youtube:player_client={config.YTDLP_CLIENT}"]
+            print(f"   YouTube 客户端: {config.YTDLP_CLIENT}")
     val = _resolve_cookie_value_for_url(url) if url else (config.YTDLP_COOKIES or "").strip()
     args += _cookies_args_for_value(val)
     return args
@@ -238,11 +242,13 @@ def step1_download_video(url, output_dir):
                 "1) cookies 过期/不完整；",
                 "2) 代理出口不稳定（视频签名 URL 绑定出口 IP，切换节点会触发 403）；",
                 "3) 代理规则未同时覆盖 youtube.com 与 *.googlevideo.com。",
+                "4) yt-dlp 未拿到 YouTube challenge 组件，日志会出现 n challenge solving failed / Only images are available。",
                 "",
                 "建议：",
                 "- 重新导出 YouTube cookies（Netscape 格式）；",
                 "- 确保 yt-dlp 全流程走同一个稳定代理出口（避免负载均衡轮换）；",
                 "- 在代理工具中将 youtube.com / googlevideo.com 设为同一路由策略。",
+                "- 若日志出现 challenge 相关警告，确认当前网络可访问 github.com 以下载 yt-dlp 的 EJS 组件。",
             ]
             raise RuntimeError("\n".join(hint_lines)) from e
         raise
@@ -309,12 +315,15 @@ def step1_download_video(url, output_dir):
 
 
 def prepare_source(source, translate_video_name=False):
-    """第一阶段：准备视频（下载或准备本地文件），返回已准备好的视频信息字典。"""
+    """第一阶段：准备媒体（下载或准备本地文件），返回已准备好的媒体信息字典。"""
     is_local = os.path.isfile(source)
     try:
         if is_local:
             video_path = os.path.abspath(source)
             video_name = sanitize_name(Path(video_path).stem)
+            media_kind = "audio" if Path(video_path).suffix.lower() in {
+                ".aac", ".mp3", ".m4a", ".wav", ".flac", ".ogg", ".opus", ".wma"
+            } else "video"
             output_dir = os.path.join("./output", video_name)
             os.makedirs(output_dir, exist_ok=True)
 
@@ -327,9 +336,10 @@ def prepare_source(source, translate_video_name=False):
                     shutil.copy2(video_path, target_path)
                 video_path = target_path
 
-            print(f"📁 本地文件已准备: {video_path}")
+            print(f"📁 本地{ '音频' if media_kind == 'audio' else '视频' }已准备: {video_path}")
         else:
             url = source
+            media_kind = "video"
             temp_dir = "./output/_temp_download"
             os.makedirs(temp_dir, exist_ok=True)
 
@@ -383,6 +393,7 @@ def prepare_source(source, translate_video_name=False):
             "source": source,
             "video_path": video_path,
             "output_dir": output_dir,
+            "media_kind": media_kind,
             "status": "已下载",
             "error": None,
         }

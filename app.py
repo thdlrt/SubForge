@@ -101,6 +101,7 @@ class _TeeStream:
 # 全局锁：同一时间只允许一个处理任务
 _processing_lock = threading.Lock()
 _VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".ts"}
+_AUDIO_EXTS = {".aac", ".mp3", ".m4a", ".wav", ".flac", ".ogg", ".opus", ".wma"}
 _GRADIO_TEMP_DIR = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Temp" / "gradio"
 
 
@@ -182,6 +183,7 @@ def _run_processing(
     enable_enhance,
     enable_summary,
     translate_video_name,
+    enable_speaker_diarization=False,
 ):
     """Generator: 在后台线程处理视频，实时流式输出日志"""
     log_q = queue.Queue()
@@ -204,6 +206,7 @@ def _run_processing(
                     enable_enhance=enable_enhance,
                     enable_summary=enable_summary,
                     translate_video_name=translate_video_name,
+                    enable_speaker_diarization=enable_speaker_diarization,
                 )
                 all_results.append(result)
                 if result:
@@ -245,6 +248,7 @@ def _run_processing(
                         enable_dubbing=enable_dubbing,
                         enable_enhance=enable_enhance,
                         enable_summary=enable_summary,
+                        enable_speaker_diarization=enable_speaker_diarization,
                     )
                     all_results.append(result)
                     if result:
@@ -290,7 +294,7 @@ def _run_processing(
         _processing_lock.release()
 
 
-def process_handler(
+def process_video_handler(
     urls_text,
     uploaded_files,
     burn_subtitle,
@@ -299,7 +303,7 @@ def process_handler(
     enable_summary,
     translate_video_name,
 ):
-    """Gradio 入口：解析输入，启动处理"""
+    """Gradio 视频入口：解析输入，启动处理"""
     sources = []
 
     # 解析 YouTube 链接（每行一个）
@@ -329,6 +333,35 @@ def process_handler(
     )
 
 
+def process_audio_handler(uploaded_files, enable_speaker_diarization):
+    """Gradio 音频入口：只处理本地音频并生成字幕。"""
+    sources = []
+
+    if enable_speaker_diarization and not (config.SPEAKER_DIARIZATION_HF_TOKEN or "").strip():
+        yield "⚠ 已开启说话人区分，但尚未在设置页配置 Hugging Face Token。", []
+        return
+
+    if uploaded_files:
+        for f in uploaded_files:
+            path = f if isinstance(f, str) else getattr(f, "name", str(f))
+            if Path(path).suffix.lower() in _AUDIO_EXTS:
+                sources.append(path)
+
+    if not sources:
+        yield "⚠ 请至少上传一个音频文件。", []
+        return
+
+    yield from _run_processing(
+        sources,
+        False,
+        False,
+        False,
+        False,
+        False,
+        enable_speaker_diarization=enable_speaker_diarization,
+    )
+
+
 # ======================== 构建 UI ========================
 
 def build_ui():
@@ -345,12 +378,12 @@ def build_ui():
     with gr.Blocks(**blocks_kw) as app:
         gr.Markdown(
             "# 🎬 SubForge — AI 字幕一键生成工具\n"
-            "YouTube / 本地视频 → 语音识别 → AI 总结(可选) → AI 翻译 → 双语字幕压制"
+            "视频 / 音频 → 语音识别 → AI 翻译；视频模式额外支持总结、压制、配音"
             + api_warning
         )
 
         with gr.Tabs():
-            with gr.Tab("处理"):
+            with gr.Tab("视频"):
                 with gr.Row():
                     # ---- 左栏：输入 ----
                     with gr.Column(scale=1):
@@ -417,7 +450,7 @@ def build_ui():
                         )
 
                 process_btn.click(
-                    fn=process_handler,
+                    fn=process_video_handler,
                     inputs=[
                         urls_input,
                         file_input,
@@ -444,6 +477,43 @@ def build_ui():
                     fn=clear_gradio_temp_handler,
                     inputs=[],
                     outputs=[cleanup_status],
+                )
+
+            with gr.Tab("音频"):
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        audio_input = gr.File(
+                            label="上传本地音频",
+                            file_count="multiple",
+                            file_types=sorted(_AUDIO_EXTS),
+                        )
+                        gr.Markdown(
+                            "音频模式只生成字幕文件（英文 / 中文 / 双语），"
+                            "不会执行总结、压制硬字幕、AI 配音、画质增强。"
+                        )
+                        audio_speaker_check = gr.Checkbox(
+                            label="字幕中区分说话人（需在设置中配置 Hugging Face Token）",
+                            value=False,
+                        )
+                        audio_process_btn = gr.Button("🚀 开始处理音频", variant="primary", size="lg")
+
+                    with gr.Column(scale=1):
+                        audio_log_output = gr.Textbox(
+                            label="📋 音频处理日志",
+                            lines=22,
+                            max_lines=50,
+                            interactive=False,
+                        )
+                        audio_file_output = gr.File(
+                            label="📦 音频字幕输出（点击下载）",
+                            file_count="multiple",
+                            interactive=False,
+                        )
+
+                audio_process_btn.click(
+                    fn=process_audio_handler,
+                    inputs=[audio_input, audio_speaker_check],
+                    outputs=[audio_log_output, audio_file_output],
                 )
 
             with gr.Tab("设置"):

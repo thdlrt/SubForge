@@ -133,6 +133,15 @@ FIELD_GROUPS: list[tuple[str, list[dict]]] = [
         ],
     ),
     (
+        "说话人区分",
+        [
+            _field("speaker_diarization_hf_token", "password", "Hugging Face Token（音频说话人区分用）"),
+            _field("speaker_diarization_model", "str", "说话人区分模型"),
+            _field("speaker_diarization_device", "dropdown", "说话人区分设备", choices=["auto", "cuda", "cpu"]),
+            _field("speaker_diarization_label_prefix", "str", "说话人标签前缀"),
+        ],
+    ),
+    (
         "下载 (yt-dlp)",
         [
             _field("ytdlp_cookies", "str", "Cookies（如 ./cookies/youtube.txt 或浏览器名；未命中域名映射时用）"),

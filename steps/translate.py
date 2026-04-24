@@ -2,6 +2,7 @@
 步骤 3：翻译字幕（Qwen API）
 """
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -10,12 +11,55 @@ import srt
 import config
 
 
+_SPEAKER_PREFIX_RE = re.compile(r"^(\[[^\]]+\]\s+)(.+)$")
+
+
+def _split_speaker_prefix(text: str) -> tuple[str, str]:
+    raw = (text or "").strip()
+    match = _SPEAKER_PREFIX_RE.match(raw)
+    if not match:
+        return "", raw
+    return match.group(1), match.group(2).strip()
+
+
+def _reapply_speaker_prefix(original_texts, translated_texts):
+    merged = []
+    for original, translated in zip(original_texts, translated_texts):
+        prefix, body = _split_speaker_prefix(original)
+        translated_body = (translated or "").strip()
+        if prefix and translated_body:
+            merged.append(prefix + translated_body)
+        elif prefix:
+            merged.append(prefix + body)
+        else:
+            merged.append(translated_body or body)
+    return merged
+
+
+def _subtitles_have_speaker_prefix(subtitles) -> bool:
+    texts = [(sub.content or "").strip() for sub in subtitles if (sub.content or "").strip()]
+    return any(_SPEAKER_PREFIX_RE.match(text) for text in texts)
+
+
+def _srt_file_has_speaker_prefix(path: str) -> bool:
+    if not os.path.exists(path):
+        return False
+    with open(path, encoding="utf-8") as handle:
+        subtitles = list(srt.parse(handle.read()))
+    return _subtitles_have_speaker_prefix(subtitles)
+
+
 def translate_batch_qwen(texts):
     """用 Qwen API 批量翻译"""
     from openai import OpenAI
 
     client = OpenAI(api_key=config.QWEN_API_KEY, base_url=config.QWEN_BASE_URL)
-    user_content = "\n".join(texts)
+    stripped_texts = []
+    for text in texts:
+        _prefix, body = _split_speaker_prefix(text)
+        stripped_texts.append(body)
+
+    user_content = "\n".join(stripped_texts)
 
     for attempt in range(config.API_RETRY):
         try:
@@ -33,10 +77,10 @@ def translate_batch_qwen(texts):
             translated_lines = [line.strip() for line in result.split("\n") if line.strip()]
 
             if len(translated_lines) == len(texts):
-                return translated_lines
+                return _reapply_speaker_prefix(texts, translated_lines)
 
             if len(translated_lines) > len(texts):
-                return translated_lines[:len(texts)]
+                return _reapply_speaker_prefix(texts, translated_lines[:len(texts)])
 
             print(f"    ⚠ 行数不匹配 ({len(translated_lines)} vs {len(texts)})，第 {attempt+1} 次重试...")
             continue
@@ -57,19 +101,23 @@ def translate_one_by_one(texts):
     results = []
 
     for text in texts:
+        prefix, body = _split_speaker_prefix(text)
         try:
             response = client.chat.completions.create(
                 model=config.QWEN_MODEL,
                 messages=[
                     {"role": "system", "content": "将以下英文翻译成简体中文，只输出翻译结果："},
-                    {"role": "user", "content": text}
+                    {"role": "user", "content": body}
                 ],
                 temperature=0.3,
                 max_tokens=256,
                 extra_body={"enable_thinking": False},
             )
             translated = response.choices[0].message.content.strip()
-            results.append(translated if translated else text)
+            if prefix:
+                results.append(prefix + (translated if translated else body))
+            else:
+                results.append(translated if translated else text)
         except Exception:
             results.append(text)
         time.sleep(0.5)
@@ -86,10 +134,16 @@ def step3_translate(subs, video_path):
     zh_srt_path  = video_path.rsplit(".", 1)[0] + "_zh.srt"
     bi_srt_path  = video_path.rsplit(".", 1)[0] + "_bilingual.srt"
     if os.path.exists(zh_srt_path) and os.path.exists(bi_srt_path):
-        print(f"⏭️  中文/双语字幕已存在，跳过翻译:")
-        print(f"   ↳ {zh_srt_path}")
-        print(f"   ↳ {bi_srt_path}")
-        return zh_srt_path, bi_srt_path
+        source_has_speakers = _subtitles_have_speaker_prefix(subs)
+        zh_has_speakers = _srt_file_has_speaker_prefix(zh_srt_path)
+        bi_has_speakers = _srt_file_has_speaker_prefix(bi_srt_path)
+        if not source_has_speakers or (zh_has_speakers and bi_has_speakers):
+            print(f"⏭️  中文/双语字幕已存在，跳过翻译:")
+            print(f"   ↳ {zh_srt_path}")
+            print(f"   ↳ {bi_srt_path}")
+            return zh_srt_path, bi_srt_path
+
+        print("♻️  检测到英文字幕新增说话人标签，重新生成中文/双语字幕...")
 
     total = len(subs)
     batches = [

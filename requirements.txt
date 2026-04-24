@@ -13,6 +13,8 @@ demucs>=4.0.1
 edge-tts>=6.1.12
 pydub>=0.25.1
 soundfile>=0.12.1
+pyannote.audio>=3.3.2
+speechbrain>=1.1.0
 
 realesrgan>=0.3.0
 basicsr==1.4.2

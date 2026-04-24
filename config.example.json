@@ -3,6 +3,10 @@
     "device": "auto",
     "compute_type": "auto",
     "video_language": null,
+    "speaker_diarization_hf_token": "hf_xxxxxxxxxxxxxxxxxxxxxxxx",
+    "speaker_diarization_model": "pyannote/speaker-diarization-3.1",
+    "speaker_diarization_device": "auto",
+    "speaker_diarization_label_prefix": "说话人",
     "max_video_height": 1080,
     "ytdlp_cookies": "",
     "ytdlp_cookies_by_host": {
