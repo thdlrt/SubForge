@@ -2,7 +2,7 @@
 将目录下视频文件名译为简体中文：只取「第一个下划线 _ 之前」的部分参与翻译，
 下划线及其后内容丢弃，扩展名不变。
 
-依赖 config.json 中的 qwen_api_key / qwen_base_url / qwen_model（与主项目一致）。
+依赖 config.json 中的 qwen_translate_api_key / qwen_translate_base_url / qwen_translate_model（与主项目一致）。
 与字幕翻译类似：相同前缀只译一次；按 translate_batch_size 多标题合并为一次 API 请求；
 多批之间用 translate_concurrency 并发（见 config.json）。
 
@@ -57,9 +57,9 @@ def _translate_single_prefix(text: str) -> str:
     try:
         from openai import OpenAI
 
-        client = OpenAI(api_key=config.QWEN_API_KEY, base_url=config.QWEN_BASE_URL)
+        client = OpenAI(api_key=config.QWEN_TRANSLATE_API_KEY, base_url=config.QWEN_TRANSLATE_BASE_URL)
         resp = client.chat.completions.create(
-            model=config.QWEN_MODEL,
+            model=config.QWEN_TRANSLATE_MODEL,
             messages=[
                 {
                     "role": "system",
@@ -91,14 +91,14 @@ def _batch_translate_prefix_lines(texts: list[str]) -> list[str]:
         return []
     from openai import OpenAI
 
-    client = OpenAI(api_key=config.QWEN_API_KEY, base_url=config.QWEN_BASE_URL)
+    client = OpenAI(api_key=config.QWEN_TRANSLATE_API_KEY, base_url=config.QWEN_TRANSLATE_BASE_URL)
     user_content = "\n".join(texts)
     max_tokens = min(4096, max(256, 80 * len(texts)))
 
     for attempt in range(config.API_RETRY):
         try:
             resp = client.chat.completions.create(
-                model=config.QWEN_MODEL,
+                model=config.QWEN_TRANSLATE_MODEL,
                 messages=[
                     {"role": "system", "content": FILENAME_BATCH_SYSTEM},
                     {"role": "user", "content": user_content},
@@ -238,8 +238,8 @@ def main() -> int:
         print(f"未找到视频文件（扩展名 {sorted(VIDEO_EXTS)}）：{root}")
         return 0
 
-    if not (config.QWEN_API_KEY or "").strip():
-        print("错误：config.json 中未配置 qwen_api_key。", file=sys.stderr)
+    if not (config.QWEN_TRANSLATE_API_KEY or "").strip():
+        print("错误：config.json 中未配置 qwen_translate_api_key。", file=sys.stderr)
         return 2
 
     entries: list[tuple[Path, str]] = []

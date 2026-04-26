@@ -24,9 +24,14 @@ def _load_config():
         "ytdlp_client": "",
         "subtitle_max_gap_ms": 2000,
         "subtitle_max_chars": 120,
-        "qwen_api_key": "",
-        "qwen_base_url": "",
-        "qwen_model": "qwen3.5-plus",
+        "qwen_translate_api_key": "",
+        "qwen_translate_base_url": "",
+        "qwen_translate_model": "qwen3.5-plus",
+        "qwen_summary_api_key": "",
+        "qwen_summary_base_url": "",
+        "qwen_summary_model": "qwen3.5-plus",
+        "ai_analysis_enabled": False,
+        "ai_analysis_mode": "通用",
         "translate_batch_size": 50,
         "translate_concurrency": 10,
         "api_retry": 3,
@@ -145,8 +150,12 @@ def coerce_config_values(cfg: dict) -> None:
             continue
         cfg[k] = float(cfg[k])
 
-    if "cosyvoice_fp16" in cfg and cfg["cosyvoice_fp16"] is not None:
-        cfg["cosyvoice_fp16"] = bool(cfg["cosyvoice_fp16"])
+    for k in ("cosyvoice_fp16", "ai_analysis_enabled"):
+        if k in cfg and cfg[k] is not None:
+            cfg[k] = bool(cfg[k])
+
+    if cfg.get("ai_analysis_mode") not in ("通用", "课程", "会议记录", "面试记录"):
+        cfg["ai_analysis_mode"] = "通用"
 
     vl = cfg.get("video_language")
     if isinstance(vl, str) and not vl.strip():
@@ -206,7 +215,9 @@ def assign_from_cfg(cfg: dict) -> None:
     global SUBTITLE_MERGE_MAX_CHARS_BIAS, SUBTITLE_SHORT_TAIL_MAX_WORDS
     global SUBTITLE_SHORT_TAIL_MAX_CHARS, SUBTITLE_SHORT_TAIL_MAX_DURATION_SEC
     global SUBTITLE_SPLIT_MAX_DURATION_SEC
-    global QWEN_API_KEY, QWEN_BASE_URL, QWEN_MODEL
+    global QWEN_TRANSLATE_API_KEY, QWEN_TRANSLATE_BASE_URL, QWEN_TRANSLATE_MODEL
+    global QWEN_SUMMARY_API_KEY, QWEN_SUMMARY_BASE_URL, QWEN_SUMMARY_MODEL
+    global AI_ANALYSIS_ENABLED, AI_ANALYSIS_MODE
     global TRANSLATE_BATCH_SIZE, TRANSLATE_CONCURRENCY, API_RETRY, API_SLEEP
     global FONT_SIZE, SUBTITLE_FONT, SUBTITLE_PRIMARY_COLOR, SUBTITLE_OUTLINE_COLOR
     global SUBTITLE_OUTLINE, SUBTITLE_SHADOW, SUBTITLE_MARGIN_V
@@ -251,9 +262,14 @@ def assign_from_cfg(cfg: dict) -> None:
     SUBTITLE_SHORT_TAIL_MAX_CHARS = _subtitle_advanced["short_tail_max_chars"]
     SUBTITLE_SHORT_TAIL_MAX_DURATION_SEC = _subtitle_advanced["short_tail_max_duration_sec"]
     SUBTITLE_SPLIT_MAX_DURATION_SEC = _subtitle_advanced["split_max_duration_sec"]
-    QWEN_API_KEY = cfg["qwen_api_key"]
-    QWEN_BASE_URL = cfg["qwen_base_url"]
-    QWEN_MODEL = cfg["qwen_model"]
+    QWEN_TRANSLATE_API_KEY = cfg["qwen_translate_api_key"]
+    QWEN_TRANSLATE_BASE_URL = cfg["qwen_translate_base_url"]
+    QWEN_TRANSLATE_MODEL = cfg["qwen_translate_model"]
+    QWEN_SUMMARY_API_KEY = cfg["qwen_summary_api_key"]
+    QWEN_SUMMARY_BASE_URL = cfg["qwen_summary_base_url"]
+    QWEN_SUMMARY_MODEL = cfg["qwen_summary_model"]
+    AI_ANALYSIS_ENABLED = cfg["ai_analysis_enabled"]
+    AI_ANALYSIS_MODE = cfg["ai_analysis_mode"]
     TRANSLATE_BATCH_SIZE = cfg["translate_batch_size"]
     TRANSLATE_CONCURRENCY = cfg["translate_concurrency"]
     API_RETRY = cfg["api_retry"]

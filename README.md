@@ -1,6 +1,6 @@
 # SubForge — AI 字幕 & 配音一键生成工具
 
-YouTube / 本地视频 → 语音识别 → AI 概括总结（可选）→ AI 翻译 → 双语字幕压制 → AI 中文配音，一条命令搞定。支持命令行和 Web UI 两种使用方式。
+YouTube / 本地视频 / 本地音频 → 语音识别 → 多模式 AI 分析（可选）→ AI 翻译 → 双语字幕压制 → AI 中文配音，一条命令搞定。支持命令行和 Web UI 两种使用方式。
 
 ## 功能介绍
 
@@ -10,23 +10,24 @@ YouTube / 本地视频 → 语音识别 → AI 概括总结（可选）→ AI �
 - **批量处理** — 支持同时传入多个文件 / 链接，按顺序依次处理，单个任务失败不影响后续
 - **语音识别** — 基于 [faster-whisper](https://github.com/SYSTRAN/faster-whisper)，本地 GPU 加速，生成精准英文字幕
 - **说话人区分（音频模式可选）** — 基于 `pyannote.audio` 为音频字幕增加 `[说话人1]`、`[说话人2]` 等标签
-- **AI 翻译** — 调用 Qwen3.5 等大模型 API 批量翻译，支持并发请求（默认 10 并发）
-- **AI 内容总结（可选）** — 基于英文 `.srt` 字幕调用大模型生成中文专业总结，输出 Markdown 文档
+- **AI 翻译** — 调用独立的翻译 API 批量翻译，支持并发请求（默认 10 并发）
+- **多模式 AI 分析（可选）** — 基于转写 `.srt` 调用独立的总结 API，按通用 / 课程 / 会议记录 / 面试记录生成 Markdown
 - **双语字幕** — 自动生成 英文 / 中文 / 双语 三份 `.srt` 字幕文件
 - **硬字幕压制** — 通过 ffmpeg 将双语字幕烧录进视频，可直接上传 B 站
 - **AI 中文配音** — 使用 [demucs](https://github.com/facebookresearch/demucs) 分离背景音；TTS 可选 [edge-tts](https://github.com/rany2/edge-tts)、阿里云 **Qwen TTS**（DashScope）或本地 **CosyVoice**，自动混合为配音视频
 - **AI 画质增强** — 基于 [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) 超分辨率，将视频放大至最高 4K，GPU 加速，自动限制输出不超过 4K 分辨率
+- **工具箱** — 在 Web UI 中执行附加工具：按后缀移动文件、批量翻译视频文件名、GameDev.tv 课程下载
 - **Web UI** — 基于 Gradio 的可视化界面，拖拽上传 / 粘贴链接即可，实时查看处理日志
 
 ## 处理流程
 
 ```
-视频输入 → ① 下载/导入 → ①.5 AI画质增强(可选) → ② 语音识别(字幕) → ②.5 AI概括总结(可选)
+视频输入 → ① 下载/导入 → ①.5 AI画质增强(可选) → ② 语音识别(字幕) → ②.5 AI分析 Markdown(可选)
          → ③ AI翻译(中文)
          → ④ 硬字幕压制 → ⑤ 音频分离(demucs) → ⑥ TTS语音合成
          → ⑦ 混合音频 → 配音视频输出
 
-音频输入 → ① 导入 → ② 语音识别(可选说话人区分) → ③ AI翻译(中文) → 输出 英文 / 中文 / 双语 `.srt`
+音频输入 → ① 导入 → ② 语音识别(可选说话人区分) → ②.5 AI分析 Markdown(可选) → 输出转写 `.srt` 与可选 `.md`
 ```
 
 每一步都有跳过已存在文件的逻辑，中断后重跑会自动从上次断点继续。
@@ -35,7 +36,7 @@ YouTube / 本地视频 → 语音识别 → AI 概括总结（可选）→ AI �
 
 先说结论：
 
-- 没有 NVIDIA GPU，仍可用：下载、识别、翻译、字幕压制、AI 总结、AI 配音。
+- 没有 NVIDIA GPU，仍可用：下载、识别、翻译、字幕压制、AI 分析、AI 配音。
 - 只有 AI 画质增强（Real-ESRGAN）要求 NVIDIA GPU + CUDA。
 
 ### 1. 一键创建环境（推荐）
@@ -80,13 +81,16 @@ ffmpeg -version
 Copy-Item .\config.example.json .\config.json
 ```
 
-然后编辑 `config.json`，至少填写：
+然后编辑 `config.json`，至少填写翻译与总结两套 API。两套可以填同一个服务，也可以分别使用不同模型或不同服务商：
 
 ```json
 {
-    "qwen_api_key": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
-    "qwen_base_url": "https://your-api-endpoint/v1",
-    "qwen_model": "your-model-name"
+  "qwen_translate_api_key": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
+  "qwen_translate_base_url": "https://your-translate-api-endpoint/v1",
+  "qwen_translate_model": "your-translate-model-name",
+  "qwen_summary_api_key": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
+  "qwen_summary_base_url": "https://your-summary-api-endpoint/v1",
+  "qwen_summary_model": "your-summary-model-name"
 }
 ```
 
@@ -135,16 +139,28 @@ python app.py -w
 
 启动后在界面中：
 
-- **视频** 标签页：处理 YouTube / 本地视频，可选择压制硬字幕、AI 配音、AI 画质增强、AI 总结。
-- **音频** 标签页：只处理本地音频，只生成字幕文件；可单独开启“字幕中区分说话人”。
+- **视频** 标签页：处理 YouTube / 本地视频，可选择压制硬字幕、AI 配音、AI 画质增强、AI 分析模式。
+- **音频** 标签页：处理本地音频，输出转写字幕；可开启说话人区分和 AI 分析模式。
+- **工具箱** 标签页：执行 `additionpackage` 中的后缀移动、批量译名、GameDev.tv 下载器。
 - **设置** 标签页：表单与 **JSON 编辑器实时联动**；**保存并应用** 会写入 `config.json` 并 **自动重启本程序**，新进程重新加载配置，避免内存与磁盘不一致。
  - 可点击“清理 Gradio 临时目录”按钮，手动清空 `C:\Windows\Temp\gradio` 下的缓存文件；若个别文件仍被占用，界面会显示失败项。
 
 1. 粘贴 YouTube 链接（每行一个）和/或上传本地视频文件
-2. 视频页可选择是否压制硬字幕、是否启用 AI 中文配音、是否启用 AI 画质增强、是否启用 AI 内容总结
-3. 音频页上传本地音频后，可按需开启说话人区分
-3. 点击「开始处理」，右侧实时显示处理日志
-4. 处理完成后直接下载输出文件
+2. 视频页可选择是否压制硬字幕、是否启用 AI 中文配音、是否启用 AI 画质增强、是否启用 AI 分析并选择模式
+3. 音频页上传本地音频后，可按需开启说话人区分和 AI 分析模式
+4. 点击「开始处理」，右侧实时显示处理日志
+5. 处理完成后直接下载输出文件
+
+### AI 分析模式
+
+| 模式 | 适用场景 | 输出重点 |
+| --- | --- | --- |
+| 通用 | 普通视频、播客、讲解内容 | 内容主线、核心观点、实践启发、关键术语 |
+| 课程 | 教程、训练课、技术课程 | 课程主线、知识点、步骤、易错点、复习清单 |
+| 会议记录 | 多人会议、讨论录音 | 议题、发言线索、结论、待办、风险、后续问题 |
+| 面试记录 | 招聘面试、访谈 | 问答还原、反推问题、能力证据、风险与追问 |
+
+AI 分析使用 `qwen_summary_*` 配置；字幕翻译和批量译名使用 `qwen_translate_*` 配置。
 
 ### 音频说话人区分说明
 
@@ -178,7 +194,13 @@ python auto_subtitle.py "https://youtu.be/AAA" ./input/a.mp4 "https://youtu.be/B
 - 每个任务独立处理，单个失败会跳过并继续后续任务
 - 本地文件和 YouTube 链接可任意混合
 
-> 命令行模式默认启用硬字幕压制；AI 配音与 AI 内容总结功能需通过 Web UI 开启。
+> 命令行模式默认启用硬字幕压制；AI 配音与 AI 分析功能需通过 Web UI 开启。
+
+### 工具箱
+
+- **按后缀移动文件**：递归扫描源目录，将文件名 stem 以指定后缀结尾的文件移动到目标目录；默认先预览，确认后再执行移动。
+- **批量翻译视频文件名**：扫描视频文件，取第一个 `_` 之前的标题片段调用翻译 API 生成中文文件名；默认先预览，确认后再执行重命名。
+- **GameDev.tv 课程下载**：使用 `cookies/gamedev.txt` 中的登录 cookies 枚举课程课时，可先列出课程，再下载到 `input/` 目录。
 
 ### 输出结构
 
@@ -189,7 +211,7 @@ output/
 └── My_Video/
     ├── My_Video.mp4              # 原始视频
     ├── My_Video_en.srt           # 英文字幕
-    ├── My_Video_summary.md       # AI 中文专业总结（可选）
+    ├── My_Video_summary_course.md # AI 分析 Markdown（可选，后缀随模式变化）
     ├── My_Video_zh.srt           # 中文字幕
     ├── My_Video_bilingual.srt    # 双语字幕（中文在上）
     ├── My_Video_硬字幕.mp4        # 压制好的字幕视频
@@ -258,13 +280,25 @@ output/
 
 | 参数                      | 默认值              | 可选值                                             | 说明                           |
 | ----------------------- | ---------------- | ----------------------------------------------- | ---------------------------- |
-| `qwen_api_key`          | `""`             | —                                               | API Key（**必填**）              |
-| `qwen_base_url`         | —                | —                                               | API 接口地址，填写所用服务商提供的 base URL |
-| `qwen_model`            | `"qwen3.5-plus"` | `qwen3.5-plus` / `qwen3.5-turbo` / `qwen-turbo` | 翻译使用的模型                      |
+| `qwen_translate_api_key` | `""`             | —                                               | 翻译 API Key（翻译字幕、视频名翻译使用）      |
+| `qwen_translate_base_url` | `""`            | —                                               | 翻译 API 接口地址，填写服务商 base URL |
+| `qwen_translate_model`   | `"qwen3.5-plus"` | `qwen3.5-plus` / `qwen3.5-turbo` / `qwen-turbo` | 翻译使用的模型                      |
 | `translate_batch_size`  | `50`             | 10~100                                          | 每批翻译的字幕条数，越大越快但易超 token 限制   |
 | `translate_concurrency` | `10`             | 1~20                                            | 并发请求批数，受 API QPS 限制          |
 | `api_retry`             | `3`              | 1~10                                            | 单批翻译失败的最大重试次数                |
 | `api_sleep`             | `0.5`            | 0~2                                             | 并发批次间的错开抖动上限（秒）              |
+
+
+### 总结 API 与 AI 分析
+
+
+| 参数 | 默认值 | 可选值 | 说明 |
+| --- | --- | --- | --- |
+| `qwen_summary_api_key` | `""` | — | AI 分析 / Markdown 总结使用的 API Key |
+| `qwen_summary_base_url` | `""` | — | 总结 API 接口地址，填写服务商 base URL |
+| `qwen_summary_model` | `"qwen3.5-plus"` | `qwen3.5-plus` / `qwen3.5-turbo` / `qwen-turbo` | AI 分析使用的模型 |
+| `ai_analysis_enabled` | `false` | `true` / `false` | 视频页和音频页 AI 分析开关的默认值 |
+| `ai_analysis_mode` | `"通用"` | `通用` / `课程` / `会议记录` / `面试记录` | 默认 AI 分析模式 |
 
 
 ### 字幕样式

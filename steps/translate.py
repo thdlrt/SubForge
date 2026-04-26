@@ -53,7 +53,7 @@ def translate_batch_qwen(texts):
     """用 Qwen API 批量翻译"""
     from openai import OpenAI
 
-    client = OpenAI(api_key=config.QWEN_API_KEY, base_url=config.QWEN_BASE_URL)
+    client = OpenAI(api_key=config.QWEN_TRANSLATE_API_KEY, base_url=config.QWEN_TRANSLATE_BASE_URL)
     stripped_texts = []
     for text in texts:
         _prefix, body = _split_speaker_prefix(text)
@@ -64,7 +64,7 @@ def translate_batch_qwen(texts):
     for attempt in range(config.API_RETRY):
         try:
             response = client.chat.completions.create(
-                model=config.QWEN_MODEL,
+                model=config.QWEN_TRANSLATE_MODEL,
                 messages=[
                     {"role": "system", "content": config.SYSTEM_PROMPT},
                     {"role": "user", "content": user_content}
@@ -97,14 +97,14 @@ def translate_one_by_one(texts):
     """逐条翻译（兜底方案）"""
     from openai import OpenAI
 
-    client = OpenAI(api_key=config.QWEN_API_KEY, base_url=config.QWEN_BASE_URL)
+    client = OpenAI(api_key=config.QWEN_TRANSLATE_API_KEY, base_url=config.QWEN_TRANSLATE_BASE_URL)
     results = []
 
     for text in texts:
         prefix, body = _split_speaker_prefix(text)
         try:
             response = client.chat.completions.create(
-                model=config.QWEN_MODEL,
+                model=config.QWEN_TRANSLATE_MODEL,
                 messages=[
                     {"role": "system", "content": "将以下英文翻译成简体中文，只输出翻译结果："},
                     {"role": "user", "content": body}
@@ -128,7 +128,7 @@ def translate_one_by_one(texts):
 def step3_translate(subs, video_path):
     """用 Qwen API 并发翻译字幕"""
     print("\n" + "=" * 60)
-    print(f"🌐 第三步：使用 Qwen3.5 API 翻译字幕（并发 {config.TRANSLATE_CONCURRENCY} 批）...")
+    print(f"🌐 第三步：使用翻译 API [{config.QWEN_TRANSLATE_MODEL}] 翻译字幕（并发 {config.TRANSLATE_CONCURRENCY} 批）...")
     print("=" * 60)
 
     zh_srt_path  = video_path.rsplit(".", 1)[0] + "_zh.srt"

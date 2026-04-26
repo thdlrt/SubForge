@@ -184,13 +184,28 @@ FIELD_GROUPS: list[tuple[str, list[dict]]] = [
     (
         "翻译 API (Qwen 兼容)",
         [
-            _field("qwen_api_key", "password", "Qwen API Key"),
-            _field("qwen_base_url", "str", "Base URL"),
-            _field("qwen_model", "str", "模型名"),
+            _field("qwen_translate_api_key", "password", "翻译 API Key"),
+            _field("qwen_translate_base_url", "str", "翻译 Base URL"),
+            _field("qwen_translate_model", "str", "翻译模型名"),
             _field("translate_batch_size", "int", "每批翻译条数"),
             _field("translate_concurrency", "int", "并发批数"),
             _field("api_retry", "int", "失败重试次数"),
             _field("api_sleep", "float", "批次间抖动上限 (秒)", precision=2),
+        ],
+    ),
+    (
+        "总结 API (Qwen 兼容)",
+        [
+            _field("qwen_summary_api_key", "password", "总结 API Key"),
+            _field("qwen_summary_base_url", "str", "总结 Base URL"),
+            _field("qwen_summary_model", "str", "总结模型名"),
+        ],
+    ),
+    (
+        "AI 分析 / Markdown",
+        [
+            _field("ai_analysis_enabled", "bool", "默认启用 AI 分析并生成 Markdown"),
+            _field("ai_analysis_mode", "dropdown", "默认分析模式", choices=["通用", "课程", "会议记录", "面试记录"]),
         ],
     ),
     (
@@ -333,12 +348,14 @@ def config_summary_markdown() -> str:
         )
     else:
         tts_line = f"**当前 TTS**: `edge-tts` · 音色 `{config.TTS_VOICE}`"
-    key_ok = "已配置" if (config.QWEN_API_KEY or "").strip() else "未配置"
+    translate_key_ok = "已配置" if (config.QWEN_TRANSLATE_API_KEY or "").strip() else "未配置"
+    summary_key_ok = "已配置" if (config.QWEN_SUMMARY_API_KEY or "").strip() else "未配置"
     return (
         f"{tts_line}\n\n"
         f"**当前配置** *(内存中的已加载配置)*\n\n"
         f"- 语音模型: `{config.WHISPER_MODEL}` · 语言: `{config.VIDEO_LANGUAGE}`\n"
-        f"- 翻译模型: `{config.QWEN_MODEL}` · 并发: `{config.TRANSLATE_CONCURRENCY}` · API Key: {key_ok}\n"
+        f"- 翻译模型: `{config.QWEN_TRANSLATE_MODEL}` · 并发: `{config.TRANSLATE_CONCURRENCY}` · API Key: {translate_key_ok}\n"
+        f"- AI 分析模型: `{config.QWEN_SUMMARY_MODEL}` · 默认模式: `{config.AI_ANALYSIS_MODE}` · API Key: {summary_key_ok}\n"
         f"- 断句间隙: `{config.SUBTITLE_MAX_GAP_MS}` ms · "
         f"字体: `{config.SUBTITLE_FONT}` {config.FONT_SIZE}px\n\n"
         f"*在 **设置** 中改完后点 **保存并应用**（会写 `config.json` 并**重启程序**）。*"
@@ -360,7 +377,7 @@ def build_settings_tab(
 
     field_components: list = []
     for title, fields in FIELD_GROUPS:
-        with gr.Accordion(title, open=title in ("语音识别 / 视频", "翻译 API (Qwen 兼容)", "TTS / 配音")):
+        with gr.Accordion(title, open=title in ("语音识别 / 视频", "翻译 API (Qwen 兼容)", "总结 API (Qwen 兼容)", "AI 分析 / Markdown", "TTS / 配音")):
             for spec in fields:
                 field_components.append(_make_widget(spec, cfg))
 

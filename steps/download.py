@@ -150,15 +150,15 @@ def _translate_title_with_qwen(raw_title: str) -> str:
     text = (raw_title or "").strip()
     if not text:
         return text
-    if not (config.QWEN_API_KEY or "").strip():
-        print("   ⚠ 未配置 qwen_api_key，跳过中文命名")
+    if not (config.QWEN_TRANSLATE_API_KEY or "").strip():
+        print("   ⚠ 未配置 qwen_translate_api_key，跳过中文命名")
         return text
     try:
         from openai import OpenAI
 
-        client = OpenAI(api_key=config.QWEN_API_KEY, base_url=config.QWEN_BASE_URL)
+        client = OpenAI(api_key=config.QWEN_TRANSLATE_API_KEY, base_url=config.QWEN_TRANSLATE_BASE_URL)
         resp = client.chat.completions.create(
-            model=config.QWEN_MODEL,
+            model=config.QWEN_TRANSLATE_MODEL,
             messages=[
                 {
                     "role": "system",

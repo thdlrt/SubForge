@@ -35,9 +35,9 @@ _AUDIO_EXTS = {".aac", ".mp3", ".m4a", ".wav", ".flac", ".ogg", ".opus", ".wma"}
 
 
 def _process_prepared(prepared, burn_subtitle=True, enable_dubbing=False,
-                      enable_enhance=False, enable_summary=False,
-                      enable_speaker_diarization=False):
-    """第二阶段：处理已下载的视频（识别 → 总结(可选) → 翻译 → 压制字幕 → 配音）。
+                      enable_enhance=False, enable_ai_analysis=False,
+                      ai_analysis_mode=None, enable_speaker_diarization=False):
+    """第二阶段：处理已下载的视频（识别 → AI分析(可选) → 翻译 → 压制字幕 → 配音）。
     接受 _prepare_source() 返回的字典；若准备阶段已失败则直接透传错误结果。"""
     source = prepared["source"]
 
@@ -61,11 +61,13 @@ def _process_prepared(prepared, burn_subtitle=True, enable_dubbing=False,
     print(f"\n   工作目录: {os.path.abspath(output_dir)}")
     print(f"   语音识别: faster-whisper [{config.WHISPER_MODEL}] ← 本地 GPU")
     if is_audio:
-        print("   处理模式: 音频转写模式（仅识别字幕文件）")
+        print("   处理模式: 音频转写模式（识别字幕，可选 AI 分析）")
         if enable_speaker_diarization:
             print("   说话人区分: 已启用")
     else:
-        print(f"   翻译引擎: Qwen3.5 API [{config.QWEN_MODEL}] ← 云端大模型")
+        print(f"   翻译引擎: 翻译 API [{config.QWEN_TRANSLATE_MODEL}] ← 云端大模型")
+    if enable_ai_analysis:
+        print(f"   AI 分析: 总结 API [{config.QWEN_SUMMARY_MODEL}] · 模式 [{ai_analysis_mode or config.AI_ANALYSIS_MODE}]")
 
     current_step = "初始化"
     en_srt_path = zh_srt_path = bi_srt_path = None
@@ -83,12 +85,12 @@ def _process_prepared(prepared, burn_subtitle=True, enable_dubbing=False,
             enable_speaker_diarization=enable_speaker_diarization,
         )
 
-        if enable_summary and not is_audio:
-            current_step = "2.5-AI内容总结"
-            summary_md_path = step2_5_summarize_from_srt(en_srt_path, video_path)
+        if enable_ai_analysis:
+            current_step = "2.5-AI分析"
+            summary_md_path = step2_5_summarize_from_srt(en_srt_path, video_path, ai_analysis_mode)
 
         if is_audio:
-            print("   音频模式已跳过：字幕翻译、AI 总结、硬字幕压制、AI 配音")
+            print("   音频模式已跳过：字幕翻译、硬字幕压制、AI 配音、画质增强")
         elif burn_subtitle:
             current_step = "3-翻译字幕"
             zh_srt_path, bi_srt_path = step3_translate(subs, video_path)
@@ -135,7 +137,7 @@ def _process_prepared(prepared, burn_subtitle=True, enable_dubbing=False,
     if bi_srt_path:
         print(f"  双语字幕:   {bi_srt_path}")
     if summary_md_path:
-        print(f"  AI总结:     {summary_md_path}")
+        print(f"  AI分析:     {summary_md_path}")
     if final_video:
         print(f"  最终视频:   {final_video}")
     if dubbed_video:
@@ -156,14 +158,16 @@ def _process_prepared(prepared, burn_subtitle=True, enable_dubbing=False,
 
 
 def process_one(source, burn_subtitle=True, enable_dubbing=False,
-                enable_enhance=False, enable_summary=False,
-                translate_video_name=False, enable_speaker_diarization=False):
+                enable_enhance=False, enable_ai_analysis=False,
+                ai_analysis_mode=None, translate_video_name=False,
+                enable_speaker_diarization=False):
     """处理单个视频源（本地文件或 YouTube 链接）。
     组合 _prepare_source + _process_prepared，保持向后兼容。"""
     prepared = _prepare_source(source, translate_video_name=translate_video_name)
     return _process_prepared(prepared, burn_subtitle=burn_subtitle,
                              enable_dubbing=enable_dubbing, enable_enhance=enable_enhance,
-                             enable_summary=enable_summary,
+                             enable_ai_analysis=enable_ai_analysis,
+                             ai_analysis_mode=ai_analysis_mode,
                              enable_speaker_diarization=enable_speaker_diarization)
 
 
@@ -208,7 +212,7 @@ def main():
             print(f"\n✅ 下载阶段完成：{dl_ok} 成功 / {dl_fail} 失败 / {total} 总计")
 
             print("\n" + "=" * 60)
-            print("⚙️  第二阶段：批量处理（识别 → 总结(可选) → 翻译 → 压制字幕）")
+            print("⚙️  第二阶段：批量处理（识别 → AI分析(可选) → 翻译 → 压制字幕）")
             print("=" * 60)
             for i, prepared in enumerate(prepared_list, 1):
                 print("\n" + "#" * 60)

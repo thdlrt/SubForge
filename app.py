@@ -31,6 +31,7 @@ sys.path.insert(0, _ROOT)
 import auto_subtitle
 import config
 import settings_ui
+from additionpackage import gamedevtv_downloader, move_files_by_suffix, translate_video_names_zh
 from cosyvoice_manager import shutdown_cosyvoice_service
 from portutil import pick_free_tcp_port
 
@@ -145,11 +146,227 @@ def clear_gradio_temp_handler():
     return summary
 
 
+def _run_logged_tool(task_func):
+    """Generator: 运行工具箱任务，复用全局锁并流式返回日志。"""
+    log_q = queue.Queue()
+    done = threading.Event()
+
+    def worker():
+        old_stdout, old_stderr = sys.stdout, sys.stderr
+        sys.stdout = _TeeStream(old_stdout, log_q)
+        sys.stderr = _TeeStream(old_stderr, log_q)
+        try:
+            task_func()
+        except Exception:
+            import traceback
+            print(f"\n❌ 工具执行失败：\n{traceback.format_exc()}")
+        finally:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
+            done.set()
+
+    if not _processing_lock.acquire(blocking=False):
+        yield "⚠ 已有任务正在处理中，请等待完成后再试。"
+        return
+
+    try:
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+
+        log_text = ""
+        while not done.is_set() or not log_q.empty():
+            try:
+                msg = log_q.get(timeout=0.3)
+                log_text += msg + "\n"
+                yield log_text
+            except queue.Empty:
+                pass
+
+        while not log_q.empty():
+            log_text += log_q.get_nowait() + "\n"
+        yield log_text or "✅ 工具执行完成。"
+    finally:
+        _processing_lock.release()
+
+
+def _move_files_by_suffix_impl(source_dir, dest_dir, suffix, apply, overwrite):
+    suffix = (suffix or "").strip()
+    if not suffix:
+        raise ValueError("后缀不能为空")
+    root = Path(str(source_dir or "").strip()).resolve()
+    if not root.is_dir():
+        raise FileNotFoundError(f"源目录不存在或不是目录：{root}")
+    target_dir = Path(str(dest_dir or "").strip()).resolve()
+    matches = move_files_by_suffix.iter_matches(root, suffix)
+    if not matches:
+        print(f"未找到 stem 以 {suffix!r} 结尾的文件：{root}")
+        return
+
+    print(f"共 {len(matches)} 个文件匹配后缀 {suffix!r}")
+    for src in matches:
+        target = target_dir / src.name
+        rel = src.relative_to(root)
+        if target.resolve() == src.resolve():
+            print(f"跳过（已在目标）：{src}")
+            continue
+        if target.exists() and not overwrite:
+            print(f"跳过（目标已存在，勾选覆盖可替换）：{src} -> {target}")
+            continue
+        if apply:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(target))
+            print(f"MOVED {rel} -> {target}")
+        else:
+            print(f"DRY-RUN {rel} -> {target}")
+
+    if not apply:
+        print("\n以上为预览。确认无误后点击执行移动。")
+
+
+def move_suffix_preview_handler(source_dir, dest_dir, suffix, overwrite):
+    yield from _run_logged_tool(
+        lambda: _move_files_by_suffix_impl(source_dir, dest_dir, suffix, False, overwrite)
+    )
+
+
+def move_suffix_apply_handler(source_dir, dest_dir, suffix, overwrite):
+    yield from _run_logged_tool(
+        lambda: _move_files_by_suffix_impl(source_dir, dest_dir, suffix, True, overwrite)
+    )
+
+
+def _translate_video_names_impl(directory, recursive, apply):
+    root = Path(str(directory or "").strip()).resolve()
+    if not root.is_dir():
+        raise FileNotFoundError(f"不是目录：{root}")
+    if not (config.QWEN_TRANSLATE_API_KEY or "").strip():
+        raise RuntimeError("未配置 qwen_translate_api_key，无法批量译名")
+
+    videos = translate_video_names_zh.collect_videos(root, bool(recursive))
+    if not videos:
+        print(f"未找到视频文件（扩展名 {sorted(translate_video_names_zh.VIDEO_EXTS)}）：{root}")
+        return
+
+    entries = []
+    for path in videos:
+        prefix = translate_video_names_zh.stem_prefix_before_first_underscore(path.stem)
+        if not prefix.strip():
+            print(f"跳过（无可译前缀）：{path.name}")
+            continue
+        entries.append((path, prefix))
+    if not entries:
+        print("未找到可翻译的视频文件名前缀。")
+        return
+
+    unique_prefixes = list(dict.fromkeys(prefix for _, prefix in entries))
+    batch_size = max(1, int(config.TRANSLATE_BATCH_SIZE))
+    n_batches = (len(unique_prefixes) + batch_size - 1) // batch_size
+    print(
+        f"共 {len(videos)} 个视频，{len(unique_prefixes)} 个不同前缀；"
+        f"分 {n_batches} 批请求，至多 {config.TRANSLATE_CONCURRENCY} 批并发。"
+    )
+
+    prefix_to_zh = translate_video_names_zh.translate_unique_prefixes(unique_prefixes)
+    changed = 0
+    for path, prefix in entries:
+        raw_zh = prefix_to_zh.get(prefix, prefix)
+        zh = translate_video_names_zh.sanitize_name(raw_zh)
+        if not zh:
+            print(f"跳过（译名为空）：{path.name}")
+            continue
+        new_path = translate_video_names_zh.unique_target_path(
+            path.with_name(zh + path.suffix.lower()),
+            source=path,
+        )
+        if new_path.resolve() == path.resolve():
+            print(f"跳过（已是目标名）：{path.name}")
+            continue
+
+        print(f"{'RENAME' if apply else 'DRY-RUN'} {path.name}")
+        print(f"         -> {new_path.name}")
+        changed += 1
+        if apply:
+            os.rename(path, new_path)
+
+    if not apply:
+        print("\n以上为预览。确认无误后点击执行重命名。")
+    print(f"共 {'重命名' if apply else '计划重命名'} {changed} 个文件。")
+
+
+def translate_names_preview_handler(directory, recursive):
+    yield from _run_logged_tool(lambda: _translate_video_names_impl(directory, recursive, False))
+
+
+def translate_names_apply_handler(directory, recursive):
+    yield from _run_logged_tool(lambda: _translate_video_names_impl(directory, recursive, True))
+
+
+def _gamedev_tool_impl(course_url, cookie_path, output_dir, list_only, limit, force):
+    url = str(course_url or "").strip()
+    if not url:
+        raise ValueError("课程链接不能为空")
+    cookie = Path(str(cookie_path or gamedevtv_downloader.DEFAULT_COOKIE_PATH).strip()).resolve()
+    out_dir = Path(str(output_dir or gamedevtv_downloader.DEFAULT_INPUT_DIR).strip()).resolve()
+    limit = max(0, int(float(limit or 0)))
+
+    downloader = gamedevtv_downloader.GameDevDownloader(cookie, out_dir)
+    course_slug = gamedevtv_downloader.extract_course_slug(url)
+    course_id = downloader.resolve_course_id(url)
+    course = downloader.fetch_course(course_id)
+    course_title = course.get("title") or f"Course {course_id}"
+    lectures = list(downloader.iter_lectures(course))
+    if not lectures:
+        raise RuntimeError("未从课程 API 中解析到任何带视频的课时。")
+
+    print(f"课程: {course_title}")
+    print(f"course_id: {course_id}")
+    print(f"课时数: {len(lectures)}")
+
+    if list_only:
+        for lec in lectures:
+            print(
+                f"[{lec.section_index}.{lec.lecture_index}] "
+                f"{lec.section_title} / {lec.lecture_title} -> {lec.relative_url}"
+            )
+        return
+
+    selected = lectures[:limit] if limit > 0 else lectures
+    for idx, lecture in enumerate(selected, 1):
+        out_path = downloader.build_output_path(course_title, lecture)
+        print(f"\n[{idx}/{len(selected)}] {lecture.section_title} / {lecture.lecture_title}")
+        if course_slug:
+            print(f"  页面: https://gamedev.tv/courses/{course_slug}/{lecture.relative_url}")
+        print(f"  输出: {out_path}")
+        if out_path.exists() and downloader.is_good_mp4(out_path) and not force:
+            meta = downloader.ffprobe_summary(out_path)
+            print(
+                f"  SKIP 已存在 "
+                f"(时长 {meta['duration']:.1f}s, 大小 {meta['size'] / 1024 / 1024:.1f} MB)"
+            )
+            continue
+        downloader.download_hls(lecture, out_path)
+        meta = downloader.ffprobe_summary(out_path)
+        print(f"  DONE 完成 (时长 {meta['duration']:.1f}s, 大小 {meta['size'] / 1024 / 1024:.1f} MB)")
+
+
+def gamedev_list_handler(course_url, cookie_path, output_dir):
+    yield from _run_logged_tool(
+        lambda: _gamedev_tool_impl(course_url, cookie_path, output_dir, True, 0, False)
+    )
+
+
+def gamedev_download_handler(course_url, cookie_path, output_dir, limit, force):
+    yield from _run_logged_tool(
+        lambda: _gamedev_tool_impl(course_url, cookie_path, output_dir, False, limit, force)
+    )
+
+
 def process_all_input_handler(
     burn_subtitle,
     enable_dubbing,
     enable_enhance,
-    enable_summary,
+    enable_ai_analysis,
+    ai_analysis_mode,
     translate_video_name,
 ):
     """一键处理 input 下所有本地视频。"""
@@ -169,7 +386,8 @@ def process_all_input_handler(
         burn_subtitle,
         enable_dubbing,
         enable_enhance,
-        enable_summary,
+        enable_ai_analysis,
+        ai_analysis_mode,
         translate_video_name,
     )
 
@@ -181,7 +399,8 @@ def _run_processing(
     burn_subtitle,
     enable_dubbing,
     enable_enhance,
-    enable_summary,
+    enable_ai_analysis,
+    ai_analysis_mode,
     translate_video_name,
     enable_speaker_diarization=False,
 ):
@@ -204,7 +423,8 @@ def _run_processing(
                     sources[0], burn_subtitle=burn_subtitle,
                     enable_dubbing=enable_dubbing,
                     enable_enhance=enable_enhance,
-                    enable_summary=enable_summary,
+                    enable_ai_analysis=enable_ai_analysis,
+                    ai_analysis_mode=ai_analysis_mode,
                     translate_video_name=translate_video_name,
                     enable_speaker_diarization=enable_speaker_diarization,
                 )
@@ -237,7 +457,7 @@ def _run_processing(
 
                 # ── 第二阶段：批量处理 ─────────────────────────────────────
                 print(f"\n{'=' * 60}")
-                print("⚙️  第二阶段：批量处理（识别 → 总结(可选) → 翻译 → 压制字幕）")
+                print("⚙️  第二阶段：批量处理（识别 → AI分析(可选) → 翻译 → 压制字幕）")
                 print("=" * 60)
                 for i, prepared in enumerate(prepared_list, 1):
                     print(f"\n{'#' * 60}")
@@ -247,7 +467,8 @@ def _run_processing(
                         prepared, burn_subtitle=burn_subtitle,
                         enable_dubbing=enable_dubbing,
                         enable_enhance=enable_enhance,
-                        enable_summary=enable_summary,
+                        enable_ai_analysis=enable_ai_analysis,
+                        ai_analysis_mode=ai_analysis_mode,
                         enable_speaker_diarization=enable_speaker_diarization,
                     )
                     all_results.append(result)
@@ -300,7 +521,8 @@ def process_video_handler(
     burn_subtitle,
     enable_dubbing,
     enable_enhance,
-    enable_summary,
+    enable_ai_analysis,
+    ai_analysis_mode,
     translate_video_name,
 ):
     """Gradio 视频入口：解析输入，启动处理"""
@@ -328,13 +550,14 @@ def process_video_handler(
         burn_subtitle,
         enable_dubbing,
         enable_enhance,
-        enable_summary,
+        enable_ai_analysis,
+        ai_analysis_mode,
         translate_video_name,
     )
 
 
-def process_audio_handler(uploaded_files, enable_speaker_diarization):
-    """Gradio 音频入口：只处理本地音频并生成字幕。"""
+def process_audio_handler(uploaded_files, enable_speaker_diarization, enable_ai_analysis, ai_analysis_mode):
+    """Gradio 音频入口：处理本地音频，生成字幕和可选 AI 分析。"""
     sources = []
 
     if enable_speaker_diarization and not (config.SPEAKER_DIARIZATION_HF_TOKEN or "").strip():
@@ -356,7 +579,8 @@ def process_audio_handler(uploaded_files, enable_speaker_diarization):
         False,
         False,
         False,
-        False,
+        enable_ai_analysis,
+        ai_analysis_mode,
         False,
         enable_speaker_diarization=enable_speaker_diarization,
     )
@@ -367,9 +591,9 @@ def process_audio_handler(uploaded_files, enable_speaker_diarization):
 def build_ui():
     # 检查 API Key 配置
     api_warning = ""
-    if not config.QWEN_API_KEY:
+    if not config.QWEN_TRANSLATE_API_KEY or not config.QWEN_SUMMARY_API_KEY:
         api_warning = (
-            "\n> ⚠️ **API Key 未配置**：请先复制 `config.example.json` → `config.json` 并填写 API Key，否则 AI 总结/翻译步骤会失败。"
+            "\n> ⚠️ **API Key 未完整配置**：翻译使用 `qwen_translate_*`，AI 分析使用 `qwen_summary_*`。"
         )
 
     blocks_kw: dict = {"title": "SubForge — AI 字幕生成"}
@@ -378,7 +602,7 @@ def build_ui():
     with gr.Blocks(**blocks_kw) as app:
         gr.Markdown(
             "# 🎬 SubForge — AI 字幕一键生成工具\n"
-            "视频模式：识别 + 翻译；音频模式：只转写，可选区分说话人"
+            "视频模式：识别 + AI 分析 + 翻译；音频模式：转写，可选区分说话人与 AI 分析"
             + api_warning
         )
 
@@ -408,12 +632,17 @@ def build_ui():
                                 label="AI 画质增强（仅 NVIDIA GPU，Real-ESRGAN 超分辨率）",
                                 value=False,
                             )
-                            summary_check = gr.Checkbox(
-                                label="AI 内容概括总结（基于英文 SRT 生成中文 Markdown）",
-                                value=False,
+                            ai_analysis_check = gr.Checkbox(
+                                label="AI 分析并生成 Markdown（基于转写 SRT）",
+                                value=bool(config.AI_ANALYSIS_ENABLED),
+                            )
+                            ai_analysis_mode = gr.Dropdown(
+                                label="AI 分析模式",
+                                choices=["通用", "课程", "会议记录", "面试记录"],
+                                value=config.AI_ANALYSIS_MODE,
                             )
                             translate_name_check = gr.Checkbox(
-                                label="自动将视频名称翻译为中文（下载和本地视频都生效，使用 Qwen API）",
+                                label="自动将视频名称翻译为中文（下载和本地视频都生效，使用翻译 API）",
                                 value=False,
                             )
                             config_hint_md = gr.Markdown(value=settings_ui.config_summary_markdown())
@@ -457,7 +686,8 @@ def build_ui():
                         burn_sub,
                         dub_check,
                         enhance_check,
-                        summary_check,
+                        ai_analysis_check,
+                        ai_analysis_mode,
                         translate_name_check,
                     ],
                     outputs=[log_output, file_output],
@@ -468,7 +698,8 @@ def build_ui():
                         burn_sub,
                         dub_check,
                         enhance_check,
-                        summary_check,
+                        ai_analysis_check,
+                        ai_analysis_mode,
                         translate_name_check,
                     ],
                     outputs=[log_output, file_output],
@@ -488,12 +719,21 @@ def build_ui():
                             file_types=sorted(_AUDIO_EXTS),
                         )
                         gr.Markdown(
-                            "音频模式只做转写，输出识别字幕；"
-                            "不会执行翻译、总结、压制硬字幕、AI 配音、画质增强。"
+                            "音频模式会输出识别字幕，可选说话人区分与 AI 分析；"
+                            "不会执行翻译、压制硬字幕、AI 配音、画质增强。"
                         )
                         audio_speaker_check = gr.Checkbox(
                             label="字幕中区分说话人（需在设置中配置 Hugging Face Token）",
                             value=False,
+                        )
+                        audio_ai_analysis_check = gr.Checkbox(
+                            label="AI 分析并生成 Markdown",
+                            value=bool(config.AI_ANALYSIS_ENABLED),
+                        )
+                        audio_ai_analysis_mode = gr.Dropdown(
+                            label="AI 分析模式",
+                            choices=["通用", "课程", "会议记录", "面试记录"],
+                            value=config.AI_ANALYSIS_MODE,
                         )
                         audio_process_btn = gr.Button("🚀 开始处理音频", variant="primary", size="lg")
 
@@ -512,9 +752,81 @@ def build_ui():
 
                 audio_process_btn.click(
                     fn=process_audio_handler,
-                    inputs=[audio_input, audio_speaker_check],
+                    inputs=[audio_input, audio_speaker_check, audio_ai_analysis_check, audio_ai_analysis_mode],
                     outputs=[audio_log_output, audio_file_output],
                 )
+
+            with gr.Tab("工具箱"):
+                with gr.Accordion("按后缀移动文件", open=True):
+                    with gr.Row():
+                        with gr.Column(scale=1):
+                            move_source = gr.Textbox(label="源目录", value=str(Path("./output").resolve()))
+                            move_dest = gr.Textbox(label="目标目录", value=str(Path("./output/temp").resolve()))
+                            move_suffix = gr.Textbox(label="匹配后缀", value="_配音")
+                            move_overwrite = gr.Checkbox(label="目标已存在时覆盖", value=False)
+                            with gr.Row():
+                                move_preview_btn = gr.Button("预览移动", variant="secondary")
+                                move_apply_btn = gr.Button("执行移动", variant="primary")
+                        with gr.Column(scale=1):
+                            move_log = gr.Textbox(label="移动结果", lines=14, max_lines=40, interactive=False)
+
+                    move_preview_btn.click(
+                        fn=move_suffix_preview_handler,
+                        inputs=[move_source, move_dest, move_suffix, move_overwrite],
+                        outputs=[move_log],
+                    )
+                    move_apply_btn.click(
+                        fn=move_suffix_apply_handler,
+                        inputs=[move_source, move_dest, move_suffix, move_overwrite],
+                        outputs=[move_log],
+                    )
+
+                with gr.Accordion("批量翻译视频文件名", open=True):
+                    with gr.Row():
+                        with gr.Column(scale=1):
+                            name_dir = gr.Textbox(label="视频目录", value=str(Path("./output").resolve()))
+                            name_recursive = gr.Checkbox(label="递归扫描子目录", value=True)
+                            with gr.Row():
+                                name_preview_btn = gr.Button("预览译名", variant="secondary")
+                                name_apply_btn = gr.Button("执行重命名", variant="primary")
+                        with gr.Column(scale=1):
+                            name_log = gr.Textbox(label="译名结果", lines=14, max_lines=40, interactive=False)
+
+                    name_preview_btn.click(
+                        fn=translate_names_preview_handler,
+                        inputs=[name_dir, name_recursive],
+                        outputs=[name_log],
+                    )
+                    name_apply_btn.click(
+                        fn=translate_names_apply_handler,
+                        inputs=[name_dir, name_recursive],
+                        outputs=[name_log],
+                    )
+
+                with gr.Accordion("GameDev.tv 课程下载", open=False):
+                    with gr.Row():
+                        with gr.Column(scale=1):
+                            gamedev_url = gr.Textbox(label="课程或课时链接", placeholder="https://gamedev.tv/courses/...", lines=2)
+                            gamedev_cookie = gr.Textbox(label="Cookies 文件", value=str(Path("./cookies/gamedev.txt").resolve()))
+                            gamedev_output = gr.Textbox(label="输出根目录", value=str(Path("./input").resolve()))
+                            gamedev_limit = gr.Number(label="下载前 N 节（0=全部）", value=0, precision=0)
+                            gamedev_force = gr.Checkbox(label="已存在也重新下载", value=False)
+                            with gr.Row():
+                                gamedev_list_btn = gr.Button("列出课程", variant="secondary")
+                                gamedev_download_btn = gr.Button("开始下载", variant="primary")
+                        with gr.Column(scale=1):
+                            gamedev_log = gr.Textbox(label="下载日志", lines=18, max_lines=80, interactive=False)
+
+                    gamedev_list_btn.click(
+                        fn=gamedev_list_handler,
+                        inputs=[gamedev_url, gamedev_cookie, gamedev_output],
+                        outputs=[gamedev_log],
+                    )
+                    gamedev_download_btn.click(
+                        fn=gamedev_download_handler,
+                        inputs=[gamedev_url, gamedev_cookie, gamedev_output, gamedev_limit, gamedev_force],
+                        outputs=[gamedev_log],
+                    )
 
             with gr.Tab("设置"):
                 settings_ui.build_settings_tab(config_hint_md)
